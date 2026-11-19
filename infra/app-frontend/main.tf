@@ -82,6 +82,10 @@ resource "aws_ecs_task_definition" "frontend" {
 
     environment = [
       { name = "APP_VERSION", value = var.image_tag },
+      # Fargate define HOSTNAME con el nombre de la tarea y pisa el ENV de la
+      # imagen; Next.js standalone escucharía solo en la IP de la tarea y el
+      # healthcheck a 127.0.0.1 fallaría. Se fuerza a todas las interfaces.
+      { name = "HOSTNAME", value = "0.0.0.0" },
       # El proxy /api del servidor de Next llega al gateway por el ALB interno.
       { name = "API_GATEWAY_URL", value = "http://${local.base.alb_interno_dns}:8080" },
     ]
