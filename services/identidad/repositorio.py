@@ -14,7 +14,6 @@ from common.db import inicializar
 from .models import PerfilDemandante, PerfilPrestador, Usuario
 from .tablas import PerfilDemandanteFila, PerfilPrestadorFila, UsuarioFila
 
-
 Sesion: sessionmaker[Session] = inicializar("identidad")
 
 

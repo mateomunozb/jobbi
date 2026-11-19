@@ -97,9 +97,6 @@ def obtener_verificacion(verificacion_id: str, s: Session = Depends(sesion)):
 @app.get("/prestadores/{prestador_id}/estado-verificacion", tags=["verificaciones"],
          summary="Estado consolidado de verificación de un prestador")
 def estado_verificacion(prestador_id: str, s: Session = Depends(sesion)):
-    propias = select(VerificacionIdentidadFila).where(
-        VerificacionIdentidadFila.prestadorId == prestador_id)
-
     por_estado = dict(s.execute(
         select(VerificacionIdentidadFila.estado, func.count())
         .where(VerificacionIdentidadFila.prestadorId == prestador_id)
@@ -185,8 +182,10 @@ def _metricas_de_negocio():
     with Sesion() as s:
         por_tipo = s.execute(select(SujetoVerificacionFila.tipo, SujetoVerificacionFila.estado, func.count())
                              .group_by(SujetoVerificacionFila.tipo, SujetoVerificacionFila.estado)).all()
-    nombres = {verificacion.PRESTADOR: ("jobbi_prestadores_verificacion", "Prestadores por estado de verificación (RN-01)"),
-               verificacion.DEMANDANTE: ("jobbi_demandantes_verificacion", "Demandantes por estado de verificación (RN-01)")}
+    nombres = {
+        verificacion.PRESTADOR: ("jobbi_prestadores_verificacion", "Prestadores por estado de verificación (RN-01)"),
+        verificacion.DEMANDANTE: ("jobbi_demandantes_verificacion", "Demandantes por estado de verificación (RN-01)"),
+    }
     return [(*nombres.get(tipo or verificacion.PRESTADOR, nombres[verificacion.PRESTADOR]), {"estado": estado}, n)
             for tipo, estado, n in por_tipo]
 

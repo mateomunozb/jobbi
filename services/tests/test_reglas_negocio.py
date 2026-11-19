@@ -25,7 +25,7 @@ from adquisicion import main as adquisicion
 from adquisicion.tablas import AliadoDistribucionFila, ReferidoFila
 from common import eventos
 from common.cobertura import MUNICIPIOS_VALLE_DE_ABURRA, en_cobertura
-from common.enums import EstadoContratacion, EstadoVerificacion, PlanPrestador
+from common.enums import EstadoVerificacion, PlanPrestador
 from confianza import adaptador_verificacion as adaptador
 from confianza import main as confianza
 from confianza import verificacion

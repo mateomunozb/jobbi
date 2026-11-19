@@ -1,0 +1,157 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline del FRONTEND (frontend/): CI + Release, independiente del backend.
+#
+#   Checkout → Build → Estáticas (ESLint, tsc) → Seguridad (Fluid SAST/SCA)
+#   → Integración de contenedores → Release (ECR)
+#
+# Lo invocan ci.yml (PR, sin publicar) y cd.yml (push, publica) solo cuando
+# cambió frontend/. El despliegue lo hace deploy-component.yml.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Pipeline frontend
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Tag de la imagen (hash del árbol de frontend/)"
+        type: string
+        required: true
+      publish:
+        description: "Publicar la imagen en ECR"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  TF_VERSION: "1.17.1"
+  AWS_REGION: us-east-1
+
+jobs:
+  static-analysis:
+    name: frontend · static-analysis
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: frontend/package.json
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Build · dependencias
+        run: pnpm install --frozen-lockfile
+      - name: ESLint
+        run: pnpm lint
+      - name: TypeScript (tsc --noEmit)
+        run: pnpm typecheck
+      - name: Build de Next.js
+        run: pnpm build
+
+  security-sast:
+    name: frontend · security-sast
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - run: mkdir -p reports
+      - name: Fluid Attacks SAST (frontend/)
+        id: scan
+        uses: fluidattacks/sast-action@bff64d57fdf98653f41f55922c1b0b472dd6a954 # 1.3.0
+        with:
+          scan_config_path: .fluid/sast-frontend.yaml
+          scanner_mode: ${{ github.event_name == 'pull_request' && 'diff' || 'full' }}
+      - name: Subir SARIF a GitHub Security
+        if: always() && steps.scan.outputs.sarif_file != ''
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif_file }}
+          category: fluid-sast-frontend
+
+  security-sca:
+    name: frontend · security-sca
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - run: mkdir -p reports
+      - name: Fluid Attacks SCA (package.json / pnpm-lock)
+        id: scan
+        uses: fluidattacks/sca-action@4041124e360b62f382a16d552b8c71b1913aa249 # 1.2.0
+        with:
+          scan_config_path: .fluid/sca-frontend.yaml
+          scanner_mode: ${{ github.event_name == 'pull_request' && 'diff' || 'full' }}
+      - name: Subir SARIF a GitHub Security
+        if: always() && steps.scan.outputs.sarif_file != ''
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif_file }}
+          category: fluid-sca-frontend
+
+  build-and-integration:
+    name: frontend · build-and-integration
+    needs: [static-analysis]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Build + pruebas de integración de contenedores
+        id: it
+        uses: ./.github/actions/integration-tests
+        with:
+          report-name: frontend-integration-report
+      - name: Release · empaquetar la imagen probada
+        if: inputs.publish
+        env:
+          IMAGEN: ${{ steps.it.outputs.frontend_image }}
+        run: docker save "$IMAGEN" | gzip > image.tar.gz
+      - name: Release · subir imagen como artefacto
+        if: inputs.publish
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-image-frontend
+          path: image.tar.gz
+          retention-days: 1
+          compression-level: 0
+
+  release:
+    name: frontend · release
+    if: inputs.publish
+    needs: [build-and-integration, security-sast, security-sca]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Configurar credenciales AWS (Academy)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Publicar en ECR
+        uses: ./.github/actions/release-image
+        with:
+          component: frontend
+          image-tag: ${{ inputs.image_tag }}
+          terraform-version: ${{ env.TF_VERSION }}

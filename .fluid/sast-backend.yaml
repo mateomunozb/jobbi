@@ -1,0 +1,16 @@
+# Fluid Attacks SAST · código del backend (services/)
+# Lo usa el pipeline del componente (fluidattacks/sast-action).
+language: ES
+# El build se rompe ante hallazgos de severidad alta o crítica (>= high).
+strict: true
+strictness_threshold: high
+output:
+  file_path: reports/fluid-sast-backend.sarif
+  format: SARIF
+sast:
+  include:
+    - services
+  exclude:
+    - services/.venv
+    - services/tests
+    - services/reports

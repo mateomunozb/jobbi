@@ -1,5 +1,5 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
 # 2.12.x publica ruedas para Python 3.9-3.14, así que el mismo pin sirve tanto
 # dentro de la imagen (3.11) como en el intérprete que traiga cada máquina.
 pydantic==2.12.3

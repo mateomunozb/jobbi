@@ -53,6 +53,37 @@ def crear_motor(servicio: str):
     return create_engine(url, **kwargs)
 
 
+def crear_base_si_falta(motor) -> bool:
+    """Crea la base del contexto en el servidor PostgreSQL si aún no existe.
+
+    En Kubernetes las bases las crea el init del StatefulSet; en AWS hay una sola
+    instancia RDS por ambiente y cada servicio crea la suya al arrancar la
+    primera vez. Solo actúa con CREAR_BASE_SI_FALTA=true y sobre PostgreSQL.
+    """
+    if os.getenv("CREAR_BASE_SI_FALTA", "false").lower() != "true" or motor.url.get_backend_name() != "postgresql":
+        return False
+    nombre = motor.url.database
+    if not nombre or not nombre.replace("_", "").isalnum():
+        raise ValueError(f"Nombre de base inválido: {nombre!r}")
+    administrador = create_engine(motor.url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    try:
+        with administrador.connect() as conexion:
+            existe = conexion.execute(text("SELECT 1 FROM pg_database WHERE datname = :n"), {"n": nombre}).scalar()
+            if existe:
+                return False
+            # El nombre se validó arriba (solo letras, dígitos y _): no admite inyección.
+            conexion.execute(text(f'CREATE DATABASE "{nombre}"'))
+            log.info("db_creada", extra={"base": nombre})
+            return True
+    except OperationalError as e:
+        # Servidor aún no disponible o carrera con otra réplica: esperar_a_la_base
+        # reintenta la conexión y, si la base no quedó creada, el contenedor se reinicia.
+        log.warning("db_no_creada", extra={"base": nombre, "error": str(e)})
+        return False
+    finally:
+        administrador.dispose()
+
+
 def esperar_a_la_base(motor, intentos: int = 15) -> None:
     """Reintenta con backoff exponencial (1, 2, 4 … 30 s) hasta que PostgreSQL acepte conexiones.
 
@@ -65,6 +96,8 @@ def esperar_a_la_base(motor, intentos: int = 15) -> None:
     backoff = Backoff()
     for intento in range(1, intentos + 1):
         try:
+            # En cada intento: el servidor puede estar arriba antes que la base.
+            crear_base_si_falta(motor)
             with motor.connect():
                 return
         except OperationalError as e:

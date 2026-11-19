@@ -1,2 +1,8 @@
 -r requirements.txt
-pytest==8.3.4
+pytest==9.2.0
+# Cobertura y reportes del job "unit-tests" del pipeline (ver pytest.ini).
+pytest-cov==7.1.0
+# Análisis estático (job "static-analysis"); la configuración está en ruff.toml.
+ruff==0.8.6
+# Pruebas pre-prod (staging) y post-prod (smoke) contra el ALB: tests/e2e, tests/smoke.
+requests==2.34.2

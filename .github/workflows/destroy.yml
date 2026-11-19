@@ -1,0 +1,89 @@
+# Destruye un ambiente para ahorrar presupuesto del AWS Academy Learner Lab.
+# Primero la capa app (servicios ECS), luego la base (ALB, RDS, SNS/SQS, …).
+# Los repositorios ECR (infra/shared) se conservan: guardan las versiones.
+name: Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Ambiente a destruir"
+        type: choice
+        options: [staging, production]
+        required: true
+      confirm:
+        description: "Escribe DESTRUIR para confirmar"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-destroy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.17.1"
+  TF_STATE_BUCKET: tfstate-jobbi-mateomunozb
+  ENVIRONMENT: ${{ inputs.environment }}
+
+jobs:
+  destroy:
+    name: destroy (${{ inputs.environment }})
+    if: inputs.confirm == 'DESTRUIR'
+    runs-on: ubuntu-latest
+    # Destruir production siempre pasa por aprobación (production-approval).
+    environment: ${{ inputs.environment == 'production' && 'production-approval' || inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configurar credenciales AWS (Academy)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Destruir capas de aplicación (frontend y backend)
+        run: |
+          for capa in app-frontend app-backend; do
+            echo "::group::terraform destroy infra/$capa"
+            terraform -chdir="infra/$capa" init -input=false -backend-config=../backend.hcl
+            if terraform -chdir="infra/$capa" workspace select "$ENVIRONMENT"; then
+              terraform -chdir="infra/$capa" destroy -input=false -auto-approve \
+                -var "environment_name=$ENVIRONMENT" -var "tfstate_bucket=$TF_STATE_BUCKET" -var "image_tag=destroy"
+            fi
+            echo "::endgroup::"
+          done
+
+      # RDS y el ALB tienen protección contra borrado: se quita de forma
+      # explícita (y queda registrada en el log) justo antes del destroy.
+      - name: Quitar protección contra borrado (RDS y ALB)
+        run: |
+          if aws rds describe-db-instances --db-instance-identifier "jobbi-$ENVIRONMENT-db" >/dev/null 2>&1; then
+            aws rds modify-db-instance --db-instance-identifier "jobbi-$ENVIRONMENT-db"               --no-deletion-protection --apply-immediately >/dev/null
+            aws rds wait db-instance-available --db-instance-identifier "jobbi-$ENVIRONMENT-db"
+            echo "RDS jobbi-$ENVIRONMENT-db: protección desactivada"
+          fi
+          alb=$(aws elbv2 describe-load-balancers --names "jobbi-$ENVIRONMENT-alb"             --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || true)
+          if [[ -n "$alb" && "$alb" != "None" ]]; then
+            aws elbv2 modify-load-balancer-attributes --load-balancer-arn "$alb"               --attributes Key=deletion_protection.enabled,Value=false >/dev/null
+            echo "ALB jobbi-$ENVIRONMENT-alb: protección desactivada"
+          fi
+
+      - name: Destruir capa base
+        working-directory: infra/base
+        run: |
+          terraform init -input=false -backend-config=../backend.hcl
+          terraform workspace select "$ENVIRONMENT"
+          terraform destroy -input=false -auto-approve -var "environment_name=$ENVIRONMENT"

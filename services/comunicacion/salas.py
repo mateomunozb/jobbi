@@ -50,7 +50,7 @@ class Salas:
         resultados = await asyncio.gather(
             *(ws.send_json(evento) for ws in destinos), return_exceptions=True,
         )
-        for ws, resultado in zip(destinos, resultados):
+        for ws, resultado in zip(destinos, resultados, strict=True):
             if isinstance(resultado, Exception):
                 self.salir(conversacion_id, ws)
 

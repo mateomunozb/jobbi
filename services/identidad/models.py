@@ -4,9 +4,8 @@ from datetime import date
 
 from pydantic import Field
 
-from common.esquemas import Esquema
-
 from common.enums import EstadoCuenta, EstadoVerificacion, PlanPrestador
+from common.esquemas import Esquema
 
 
 class Ubicacion(Esquema):

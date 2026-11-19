@@ -90,7 +90,9 @@ def test_al_cerrarse_el_chat_ambos_lo_ven_y_ya_no_pueden_escribir(api):
     ruta = f"/ws/conversaciones/{chat['id']}"
     with api.websocket_connect(f"{ruta}?usuarioId=demandante") as dem, \
          api.websocket_connect(f"{ruta}?usuarioId=prestador") as pres:
-        dem.receive_json(); dem.receive_json(); pres.receive_json()
+        dem.receive_json()
+        dem.receive_json()
+        pres.receive_json()
 
         api.post(f"/conversaciones/{chat['id']}/cerrar", json={"contratacionId": "c-9"})
         for ws in (dem, pres):

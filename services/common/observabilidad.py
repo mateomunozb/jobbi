@@ -218,9 +218,7 @@ def muestras_de_colas(colas: dict[str, str]) -> list[Muestra]:
     from . import eventos
 
     sqs = boto3.client(
-        "sqs", endpoint_url=eventos.AWS_ENDPOINT_URL, region_name=eventos.AWS_REGION,
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "test"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "test"),
+        "sqs", **eventos.opciones_cliente(),
         config=Config(connect_timeout=1, read_timeout=2, retries={"max_attempts": 1}),
     )
     muestras: list[Muestra] = []
@@ -235,7 +233,7 @@ def muestras_de_colas(colas: dict[str, str]) -> list[Muestra]:
             # LocalStack no responde: las demás colas tampoco, y esperar su
             # timeout una por una alargaría el scrape de todo /metrics.
             break
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S112 - una cola que falla no tumba el scrape
             continue
         for estado, atributo in (("visibles", "ApproximateNumberOfMessages"),
                                  ("en_vuelo", "ApproximateNumberOfMessagesNotVisible")):

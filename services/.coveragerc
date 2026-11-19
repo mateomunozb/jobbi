@@ -1,0 +1,12 @@
+# Cobertura del backend (job "unit-tests" del pipeline de CI).
+[run]
+source = .
+branch = True
+omit =
+    tests/*
+    .venv/*
+    */__init__.py
+
+[report]
+show_missing = False
+skip_covered = True
