@@ -4,7 +4,7 @@
 #   plan ─┬─ pipeline-backend  (CI + release)   solo si la imagen no existe
 #         ├─ pipeline-frontend (CI + release)   solo si la imagen no existe
 #         ├─ pipeline-infra    (validación IaC) solo si cambió infra/ o ci/
-#         └─ quality           (SonarCloud)
+#         └─ quality           (SonarCloud, solo main e informativo)
 #   → deploy-infra (IaC base; aprobación en production solo si cambia la base)
 #   → deploy-backend  (production: ENTREGA continua, aprobación manual)
 #   → deploy-frontend (production: DESPLIEGUE continuo, sin aprobación)
@@ -188,15 +188,21 @@ jobs:
     uses: ./.github/workflows/pipeline-infra.yml
     secrets: inherit
 
+  # SonarCloud (plan Free) solo analiza PRs y la rama main. El quality gate
+  # se exige en el PR (ci.yml → ci-ok); aquí solo se actualiza el dashboard
+  # de main, de forma informativa: no bloquea el despliegue.
   quality:
     name: quality
+    if: github.ref_name == 'main'
     uses: ./.github/workflows/quality.yml
+    with:
+      quality_gate: false
     secrets: inherit
 
   # ── IaC + Deploy Infra (capa base) ────────────────────────────────────────
   deploy-infra:
     name: deploy-infra (${{ github.ref_name == 'main' && 'production' || 'staging' }})
-    needs: [plan, backend, frontend, infra, quality]
+    needs: [plan, backend, frontend, infra]
     # Continúa aunque un pipeline se haya omitido (sin cambios), nunca si falló.
     # Si no hay nada que desplegar (p. ej. solo cambiaron pruebas), no corre.
     if: >-
