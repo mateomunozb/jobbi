@@ -9,6 +9,11 @@ name: Quality
 
 on:
   workflow_call:
+    inputs:
+      quality_gate:
+        description: "Fallar si no se cumple el quality gate (PR: sí; CD en main: informativo)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -39,3 +44,5 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
+        with:
+          args: -Dsonar.qualitygate.wait=${{ inputs.quality_gate }}

@@ -69,7 +69,7 @@ El pipeline está separado **por componente**. Un orquestador (`cd.yml` en push,
 | `pipeline-backend.yml` | Reutilizable | CI + release del backend (`services/`) |
 | `pipeline-frontend.yml` | Reutilizable | CI + release del frontend (`frontend/`) |
 | `pipeline-infra.yml` | Reutilizable | Validación y SAST de la IaC (`infra/`, `ci/`) |
-| `quality.yml` | Reutilizable | SonarCloud sobre todo el repositorio (corre siempre) |
+| `quality.yml` | Reutilizable | SonarCloud sobre todo el repositorio. En PR exige el quality gate; en push a `main` solo actualiza el dashboard (informativo). En `develop` no corre: el plan Free de SonarCloud solo analiza PRs y `main` |
 | `deploy-component.yml` | Reutilizable | Deploy App de un componente (su capa de Terraform + espera de versión) |
 | `rollback.yml` | Reutilizable + manual | Rollback por componente (automático y botón de pánico) |
 | `.github/actions/integration-tests` | Acción compuesta | Ambiente efímero de `ci/` + E2E y smoke (la usan ambos pipelines) |
@@ -97,7 +97,7 @@ flowchart TB
     I1[terraform fmt/validate<br/>compose config] & I2[SAST IaC<br/><i>Fluid Attacks</i>]
   end
 
-  Q[quality.yml<br/><i>SonarCloud quality gate</i>]
+  Q[quality.yml<br/><i>SonarCloud · solo main, informativo<br/>el gate se exige en el PR</i>]
 
   PLAN --> PB & PF & PI & Q
   PB & PF & PI & Q --> DI[deploy-infra<br/><i>Terraform base · aprobación si cambia la base</i>]
@@ -123,7 +123,7 @@ flowchart TB
 | Test estático | `backend · static-analysis`, `frontend · static-analysis`, `infra · iac-validate` | Ruff (pycodestyle, pyflakes, isort, bugbear, **Bandit**); ESLint + `tsc --noEmit` + `next build`; `terraform fmt/validate` (4 raíces) + `docker compose config` | hay un error de lint, de tipos o de IaC |
 | Test de seguridad | `security-sast`, `security-sca` de cada pipeline | **Fluid Attacks** SAST y SCA acotados a cada componente (`.fluid/*.yaml`), SARIF en GitHub Security | hay hallazgos de severidad alta o crítica (modo `diff` en PR, `full` en push) |
 | Test unitario + cobertura | `backend · unit-tests` | pytest (246 pruebas), pytest-cov (líneas + ramas) | alguna prueba falla o la cobertura queda por debajo de 65 % |
-| Calidad | `quality · sonarcloud` | SonarCloud (quality gate) | no se cumple el quality gate |
+| Calidad | `quality · sonarcloud` | SonarCloud (quality gate en el PR; informativo en `main`) | no se cumple el quality gate del PR |
 | Test de integración | `build-and-integration` de cada pipeline | Acción `integration-tests`: docker compose (nginx como ALB, PostgreSQL 16, LocalStack SNS/SQS, núcleo de servicios) + pytest E2E y smoke | algún flujo falla con las imágenes reales |
 | Release | `release` de cada pipeline | Acción `release-image`: Terraform (`infra/shared`: ECR), `amazon-ecr-login`, `docker push` | la publicación falla |
 | IaC + Deploy Infra | `deploy-infra` | Terraform `infra/base` (plan `-detailed-exitcode`; solo aplica si hay cambios) | el plan o el apply fallan |
@@ -169,13 +169,13 @@ flowchart TB
 
 | Caso | Pipelines que corren | Qué se despliega | Rollback si algo falla |
 |---|---|---|---|
-| Solo `frontend/` | frontend + quality | 1 servicio (frontend) | Solo el frontend |
-| Solo `services/` | backend + quality | 8 servicios del backend | Solo el backend |
-| Ambos | backend + frontend + quality | Backend y luego frontend | Los dos, cada uno a su `last-good-version` |
-| Solo `infra/base/` | infra + quality | Infraestructura base (sin redeploy de app) | No aplica: el plan/apply falla antes |
+| Solo `frontend/` | frontend | 1 servicio (frontend) | Solo el frontend |
+| Solo `services/` | backend | 8 servicios del backend | Solo el backend |
+| Ambos | backend + frontend | Backend y luego frontend | Los dos, cada uno a su `last-good-version` |
+| Solo `infra/base/` | infra | Infraestructura base (sin redeploy de app) | No aplica: el plan/apply falla antes |
 | Solo `tests/` o `ci/` | (en el PR: ambos pipelines) | Nada en push: las imágenes no cambian | — |
 | Solo `docs/` o `*.md` | Ninguno (`paths-ignore`) | — | — |
-| Promoción `develop → main` | Ninguno de build (imágenes ya en ECR) + quality | Los componentes cuya versión difiere de producción | Por componente |
+| Promoción `develop → main` | Ninguno de build (imágenes ya en ECR) | Los componentes cuya versión difiere de producción | Por componente |
 | Botón de pánico | `rollback.yml` | El componente elegido (o ambos) | — |
 | Ejecución manual de `cd.yml` con `forzar` | Los que falten en ECR | Ambos componentes | Ambos |
 
