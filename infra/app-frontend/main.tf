@@ -2,8 +2,8 @@
 #
 # Se despliega de forma independiente del backend (pipeline del frontend): un
 # cambio en frontend/ solo reemplaza esta tarea, y su rollback solo re-aplica
-# esta capa. Llega al gateway por Service Connect ("gateway:8080"), así que no
-# depende del estado de Terraform del backend, solo de que esté desplegado.
+# esta capa. Llega al gateway por el ALB interno (capa base, puerto 8080), así
+# que no depende del estado de Terraform del backend, solo de que esté desplegado.
 #
 #   terraform workspace select -or-create staging
 #   terraform apply -var environment_name=staging -var image_tag=<tag> -var tfstate_bucket=<bucket>
@@ -82,8 +82,8 @@ resource "aws_ecs_task_definition" "frontend" {
 
     environment = [
       { name = "APP_VERSION", value = var.image_tag },
-      # El proxy /api del servidor de Next llega al gateway por Service Connect.
-      { name = "API_GATEWAY_URL", value = "http://gateway:8080" },
+      # El proxy /api del servidor de Next llega al gateway por el ALB interno.
+      { name = "API_GATEWAY_URL", value = "http://${local.base.alb_interno_dns}:8080" },
     ]
 
     healthCheck = {
@@ -124,12 +124,6 @@ resource "aws_ecs_service" "frontend" {
     subnets          = local.base.subnet_ids
     security_groups  = [local.base.ecs_security_group_id]
     assign_public_ip = true
-  }
-
-  # Solo cliente de Service Connect: resuelve "gateway", no publica nombre.
-  service_connect_configuration {
-    enabled   = true
-    namespace = local.base.service_connect_namespace_arn
   }
 
   load_balancer {

@@ -242,10 +242,23 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
+      # Fuera de Terraform por una SCP del Learner Lab (ver infra/base/alb-logs.tf).
+      - name: Bucket de access logs de los ALB
+        run: bash ../../scripts/bootstrap-alb-logs.sh "$ENVIRONMENT"
+
       - name: Terraform init + workspace
         run: |
           terraform init -input=false -backend-config=../backend.hcl
           terraform workspace select -or-create "$ENVIRONMENT"
+
+      # Migración: el bucket de logs dejó de ser un recurso de Terraform. Si un
+      # apply anterior alcanzó a registrarlo, se saca del estado sin borrarlo
+      # (refrescarlo fallaría por la misma SCP).
+      - name: Sacar del estado los recursos S3 que ya no administra Terraform
+        run: |
+          terraform state list 2>/dev/null | grep '^aws_s3_bucket' | while read -r recurso; do
+            terraform state rm "$recurso"
+          done
 
       # -detailed-exitcode: 0 = sin cambios, 2 = hay cambios, 1 = error.
       - name: Terraform plan

@@ -80,30 +80,14 @@ resource "aws_ecs_service" "backend" {
     assign_public_ip = true # subredes públicas por defecto, sin NAT (costo)
   }
 
-  service_connect_configuration {
-    enabled   = true
-    namespace = local.base.service_connect_namespace_arn
-
-    service {
-      port_name      = "http"
-      discovery_name = each.value.dns
-      client_alias {
-        port     = each.value.port
-        dns_name = each.value.dns
-      }
-    }
-
-    log_configuration {
-      log_driver = "awslogs"
-      options = {
-        awslogs-group         = local.base.log_group_name
-        awslogs-region        = var.aws_region
-        awslogs-stream-prefix = "service-connect-${each.key}"
-      }
-    }
+  # Cada servicio se registra en su target group del ALB interno (así lo
+  # encuentran los demás) y el gateway además en el del ALB público.
+  load_balancer {
+    target_group_arn = local.base.internal_target_group_arns[each.key]
+    container_name   = each.key
+    container_port   = each.value.port
   }
 
-  # Solo el gateway recibe tráfico del ALB; los demás son internos.
   dynamic "load_balancer" {
     for_each = each.key == "gateway" ? [1] : []
     content {
@@ -113,7 +97,7 @@ resource "aws_ecs_service" "backend" {
     }
   }
 
-  health_check_grace_period_seconds = each.key == "gateway" ? 90 : null
+  health_check_grace_period_seconds = 90
   wait_for_steady_state             = true
 
   lifecycle {

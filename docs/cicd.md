@@ -188,7 +188,8 @@ flowchart TB
   user([Usuario]) -->|HTTP :80| ALB
   subgraph AWS["AWS Academy · us-east-1 · VPC por defecto (2 AZ)"]
     ALB["Application Load Balancer<br/>/api/* · /ws/* · /health* → gateway<br/>resto → frontend"]
-    subgraph ECS["ECS Fargate cluster · jobbi-&lt;env&gt;-cluster · Service Connect"]
+    INT["ALB interno<br/>un listener por servicio (:8000–:8080)"]
+    subgraph ECS["ECS Fargate cluster · jobbi-&lt;env&gt;-cluster"]
       FE[frontend<br/>Next.js :3000]
       GW[gateway / BFF<br/>:8080]
       ID[identidad :8001]
@@ -209,9 +210,10 @@ flowchart TB
     CW[(CloudWatch Logs)]
   end
   ALB --> FE & GW
-  FE -.Service Connect.-> GW
-  GW --> ID & ME & CO & CM & CF & MO
-  CF --> VE
+  FE --> INT
+  GW --> INT
+  CF --> INT
+  INT --> GW & ID & ME & CO & CM & CF & MO & VE
   ID & ME & CO & CM & CF & MO --> RDS
   CO --> SNS1 --> SQS1 --> MO
   MO --> SNS2 --> SQS2 --> CM
@@ -224,8 +226,8 @@ flowchart TB
 |---|---|---|
 | Registro de imágenes | **ECR** (`infra/shared`) | Dos repositorios compartidos por los ambientes. Tags inmutables, `scan_on_push`, retención de 30 imágenes. |
 | Cómputo | **ECS Fargate** (`infra/app-backend`, `infra/app-frontend`) | 9 servicios por ambiente: 8 del backend (un contexto por servicio, misma imagen, distinto `SERVICE_MODULE`) y el frontend. Cada capa se despliega por separado. |
-| Descubrimiento | **ECS Service Connect** (Cloud Map) | Los servicios se llaman `http://identidad:8001`, igual que en Kubernetes. |
-| Entrada | **ALB** | Ruteo por ruta: el navegador solo conoce un origen. *Stickiness* para el WebSocket del chat. |
+| Descubrimiento | **ALB interno** (un listener y un target group por servicio) | Los servicios se llaman `http://<alb-interno>:8001` (variables `SERVICIO_*_URL`). Reemplaza a Service Connect: el Learner Lab no permite crear namespaces de Cloud Map. Cada servicio sigue desplegándose y escalando por separado. |
+| Entrada | **ALB público** | Ruteo por ruta: el navegador solo conoce un origen. *Stickiness* para el WebSocket del chat. Access logs en S3 (bucket creado por `scripts/bootstrap-alb-logs.sh`, fuera de Terraform por una SCP del Learner Lab). |
 | Datos | **RDS PostgreSQL 16** | Una instancia por ambiente y una base por contexto, creada por el servicio al arrancar. |
 | Mensajería | **SNS + SQS + DLQ** | Outbox → SNS → SQS → worker, con política de cola y *redrive* a la DLQ tras 5 fallos. |
 | Secretos | **SSM Parameter Store** | `DATABASE_URL` como SecureString, inyectado por ECS. |
@@ -236,7 +238,7 @@ flowchart TB
 **Diferencias con la versión local (Minikube):**
 - LocalStack se reemplaza por SNS/SQS reales (`AWS_PROVEEDOR=aws`, credenciales del rol de la tarea).
 - El StatefulSet de PostgreSQL se reemplaza por RDS.
-- Los Service de Kubernetes se reemplazan por Service Connect.
+- Los Service de Kubernetes se reemplazan por un ALB interno (Service Connect/Cloud Map no está permitido en el Learner Lab).
 - Prometheus/Grafana se reemplazan por CloudWatch (Container Insights).
 
 **Alcance en AWS (núcleo):**
@@ -256,7 +258,7 @@ flowchart TB
 | SonarCloud | CI | Code smells, duplicación, cobertura del código nuevo | Calidad sostenida en el tiempo |
 | Integración de contenedores | CI (docker compose) | Las **imágenes reales** con PostgreSQL, SNS/SQS (LocalStack) y ruteo tipo ALB; corre las mismas suites E2E y smoke | Detecta errores de empaquetado y configuración antes de gastar en AWS |
 | E2E de aceptación | **Staging** (pre-prod) | El flujo completo: registro → verificación → oferta → contacto + chat → acuerdo → check-in/out → **cobro por Outbox → SNS → SQS** sobre la infraestructura real | Es la prueba de que la versión funciona en AWS antes de pedir aprobación |
-| Smoke | **Staging y production** (post-deploy) y después de cada rollback | Frontend y gateway arriba, cada uno con **su versión esperada** (`EXPECTED_FRONTEND_VERSION`, `EXPECTED_BACKEND_VERSION`), todos los contextos alcanzables por Service Connect, una lectura de RDS | Es rápida y no crea datos; si falla, dispara el rollback |
+| Smoke | **Staging y production** (post-deploy) y después de cada rollback | Frontend y gateway arriba, cada uno con **su versión esperada** (`EXPECTED_FRONTEND_VERSION`, `EXPECTED_BACKEND_VERSION`), todos los contextos alcanzables por el ALB interno, una lectura de RDS | Es rápida y no crea datos; si falla, dispara el rollback |
 
 ## 5. Rollback
 

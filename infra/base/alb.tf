@@ -16,12 +16,10 @@ resource "aws_lb" "app" {
   enable_deletion_protection = true
 
   access_logs {
-    bucket  = aws_s3_bucket.alb_logs.id
+    bucket  = local.alb_logs_bucket
     prefix  = "alb"
     enabled = true
   }
-
-  depends_on = [aws_s3_bucket_policy.alb_logs]
 }
 
 resource "aws_lb_target_group" "frontend" {

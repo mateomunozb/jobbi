@@ -1,7 +1,7 @@
 # Grupos de seguridad: cada capa solo acepta tráfico de la capa anterior y
 # solo sale hacia donde lo necesita (mínimo privilegio en red).
 #   Internet :80 → ALB → tareas (3000 frontend, 8080 gateway)
-#   tareas ↔ tareas (Service Connect entre contextos)
+#   tareas → ALB interno :<puerto de cada servicio> → tareas
 #   tareas → RDS :5432 · tareas → APIs de AWS :443 (ECR, SSM, SNS, SQS, Logs)
 #
 # Las reglas van como recursos separados (aws_vpc_security_group_*_rule) para
@@ -21,6 +21,12 @@ resource "aws_security_group" "alb" {
 resource "aws_security_group" "ecs" {
   name        = "${local.name_prefix}-ecs-sg"
   description = "Tareas ECS de JOBBI"
+  vpc_id      = data.aws_vpc.default.id
+}
+
+resource "aws_security_group" "alb_interno" {
+  name        = "${local.name_prefix}-alb-int-sg"
+  description = "ALB interno de JOBBI, solo desde las tareas"
   vpc_id      = data.aws_vpc.default.id
 }
 
@@ -67,22 +73,26 @@ resource "aws_vpc_security_group_ingress_rule" "tareas_desde_alb" {
   referenced_security_group_id = aws_security_group.alb.id
 }
 
-resource "aws_vpc_security_group_ingress_rule" "tareas_entre_si" {
+resource "aws_vpc_security_group_ingress_rule" "tareas_desde_alb_interno" {
+  for_each = local.servicios_internos
+
   security_group_id            = aws_security_group.ecs.id
-  description                  = "Trafico entre servicios (Service Connect)"
+  description                  = "${each.key} desde el ALB interno"
   ip_protocol                  = "tcp"
-  from_port                    = 0
-  to_port                      = 65535
-  referenced_security_group_id = aws_security_group.ecs.id
+  from_port                    = each.value.port
+  to_port                      = each.value.port
+  referenced_security_group_id = aws_security_group.alb_interno.id
 }
 
-resource "aws_vpc_security_group_egress_rule" "tareas_entre_si" {
+resource "aws_vpc_security_group_egress_rule" "tareas_a_alb_interno" {
+  for_each = local.servicios_internos
+
   security_group_id            = aws_security_group.ecs.id
-  description                  = "Trafico entre servicios (Service Connect)"
+  description                  = "Llamadas a ${each.key} por el ALB interno"
   ip_protocol                  = "tcp"
-  from_port                    = 0
-  to_port                      = 65535
-  referenced_security_group_id = aws_security_group.ecs.id
+  from_port                    = each.value.port
+  to_port                      = each.value.port
+  referenced_security_group_id = aws_security_group.alb_interno.id
 }
 
 resource "aws_vpc_security_group_egress_rule" "tareas_a_rds" {
@@ -103,6 +113,30 @@ resource "aws_vpc_security_group_egress_rule" "tareas_a_aws" {
   from_port         = 443
   to_port           = 443
   cidr_ipv4         = "0.0.0.0/0"
+}
+
+# --- ALB interno -------------------------------------------------------------
+
+resource "aws_vpc_security_group_ingress_rule" "alb_interno_desde_tareas" {
+  for_each = local.servicios_internos
+
+  security_group_id            = aws_security_group.alb_interno.id
+  description                  = "${each.key} desde las tareas"
+  ip_protocol                  = "tcp"
+  from_port                    = each.value.port
+  to_port                      = each.value.port
+  referenced_security_group_id = aws_security_group.ecs.id
+}
+
+resource "aws_vpc_security_group_egress_rule" "alb_interno_a_tareas" {
+  for_each = local.servicios_internos
+
+  security_group_id            = aws_security_group.alb_interno.id
+  description                  = "ALB interno hacia ${each.key}"
+  ip_protocol                  = "tcp"
+  from_port                    = each.value.port
+  to_port                      = each.value.port
+  referenced_security_group_id = aws_security_group.ecs.id
 }
 
 # --- RDS ---------------------------------------------------------------------

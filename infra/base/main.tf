@@ -1,8 +1,8 @@
 # Capa BASE de un ambiente de JOBBI (staging o production): todo lo que no
 # cambia con cada versión de la aplicación.
 #
-#   red (security groups) · ALB · RDS PostgreSQL · SNS/SQS · cluster ECS con
-#   namespace de Service Connect · logs
+#   red (security groups) · ALB público · ALB interno (comunicación entre
+#   servicios) · RDS PostgreSQL · SNS/SQS · cluster ECS · logs
 #
 # La capa APP (infra/app: task definitions y servicios ECS) se despliega encima
 # y lee estas salidas del estado remoto. Separarlas permite que el pipeline
@@ -49,6 +49,20 @@ locals {
 
   # Contextos con base de datos propia en RDS.
   contextos_con_base = ["identidad", "mercado", "contrataciones", "comunicacion", "confianza", "monetizacion"]
+
+  # Servicios del backend que se llaman entre sí (y el frontend al gateway) a
+  # través del ALB interno: un listener por puerto. "corto" se usa en nombres
+  # de AWS con límite de 32 caracteres (target groups).
+  servicios_internos = {
+    gateway              = { port = 8080, corto = "gw" }
+    identidad            = { port = 8001, corto = "ident" }
+    mercado              = { port = 8002, corto = "merc" }
+    contrataciones       = { port = 8003, corto = "contr" }
+    comunicacion         = { port = 8004, corto = "comun" }
+    confianza            = { port = 8005, corto = "conf" }
+    monetizacion         = { port = 8000, corto = "monet" }
+    verificacion_externa = { port = 8010, corto = "verif" }
+  }
 }
 
 # --- Recursos existentes que Terraform solo consulta ------------------------
@@ -74,22 +88,13 @@ data "aws_subnets" "default" {
   }
 }
 
-# --- Cluster ECS y descubrimiento de servicios ------------------------------
-
-# Namespace de Service Connect: cada contexto se registra con un nombre corto
-# (identidad, mercado, …) y los demás lo llaman como http://identidad:8001,
-# igual que con los Service de Kubernetes.
-resource "aws_service_discovery_http_namespace" "app" {
-  name        = local.name_prefix
-  description = "Service Connect de JOBBI (${var.environment_name})"
-}
+# --- Cluster ECS ---------------------------------------------------------------
+# El descubrimiento entre servicios lo hace el ALB interno (alb-interno.tf): el
+# Learner Lab no permite crear namespaces de Cloud Map, así que no hay Service
+# Connect.
 
 resource "aws_ecs_cluster" "app" {
   name = "${local.name_prefix}-cluster"
-
-  service_connect_defaults {
-    namespace = aws_service_discovery_http_namespace.app.arn
-  }
 
   setting {
     name  = "containerInsights"
