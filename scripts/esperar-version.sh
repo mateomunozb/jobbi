@@ -26,7 +26,7 @@ for i in $(seq 1 "$INTENTOS"); do
   actual=$(curl -s --max-time 5 "$BASE$RUTA" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))' 2>/dev/null)
   echo "[$i/$INTENTOS] $COMPONENTE=${actual:-—} (esperada $VERSION)"
-  if [ "$actual" = "$VERSION" ]; then
+  if [[ "$actual" == "$VERSION" ]]; then
     echo "✓ $COMPONENTE sirve la versión $VERSION en $BASE"
     exit 0
   fi

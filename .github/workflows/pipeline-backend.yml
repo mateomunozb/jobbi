@@ -23,7 +23,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 env:
   PYTHON_VERSION: "3.11"
@@ -42,15 +41,19 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: services/requirements-dev.txt
+          cache-dependency-path: services/requirements-dev.lock
       - name: Build · dependencias
-        run: pip install -r services/requirements-dev.txt
+        run: |
+          pip install --only-binary :all: --require-hashes -r services/requirements-dev.lock
       - name: Ruff (lint + reglas de seguridad Bandit)
         working-directory: services
         run: ruff check . --output-format=github
 
   security-sast:
     name: backend · security-sast
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -74,6 +77,9 @@ jobs:
 
   security-sca:
     name: backend · security-sca
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -105,9 +111,10 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: services/requirements-dev.txt
+          cache-dependency-path: services/requirements-dev.lock
       - name: Build · dependencias
-        run: pip install -r services/requirements-dev.txt
+        run: |
+          pip install --only-binary :all: --require-hashes -r services/requirements-dev.lock
       # SQLite temporal y SNS/SQS apagados (services/tests/conftest.py).
       - name: Pytest + cobertura (mínimo 65 %)
         working-directory: services

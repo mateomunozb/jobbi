@@ -82,7 +82,7 @@ runs:
         EXPECTED_BACKEND_VERSION: ${{ steps.tags.outputs.backend }}
         EXPECTED_FRONTEND_VERSION: ${{ steps.tags.outputs.frontend }}
       run: |
-        pip install pytest==9.2.0 requests==2.34.2
+        pip install --only-binary :all: --require-hashes -r tests/requirements.lock
         mkdir -p reports
         python -m pytest tests/e2e tests/smoke -v --junitxml=reports/integration-junit.xml
 

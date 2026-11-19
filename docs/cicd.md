@@ -298,6 +298,11 @@ cd services && python -m pytest --cov-fail-under=65 && ruff check .
 cd frontend && pnpm lint && pnpm typecheck
 for r in shared base app-backend app-frontend; do terraform -chdir=infra/$r validate; done
 
+# Regenerar los lock files con hashes (tras cambiar requirements*.txt o tests/requirements.in);
+# el pipeline instala con --only-binary :all: --require-hashes
+uv pip compile services/requirements-dev.txt --universal --generate-hashes --python-version 3.11 --only-binary :all: --no-header -o services/requirements-dev.lock
+uv pip compile tests/requirements.in --universal --generate-hashes --python-version 3.11 --only-binary :all: --no-header -o tests/requirements.lock
+
 # Ambiente de integración local (requiere Docker)
 docker build -t jobbi/backend:ci services
 docker build -t jobbi/frontend:ci --build-arg API_GATEWAY_URL=http://gateway:8080 frontend

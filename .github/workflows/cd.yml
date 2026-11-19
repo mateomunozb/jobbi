@@ -32,8 +32,7 @@ on:
         default: false
 
 permissions:
-  contents: write # tag de versión en producción
-  security-events: write # SARIF de Fluid Attacks
+  contents: read
 
 # Nunca cancelar un despliegue en curso: un terraform apply a medias deja el
 # estado bloqueado.
@@ -155,6 +154,9 @@ jobs:
   # ── Pipelines independientes por componente (CI + Release) ────────────────
   backend:
     name: backend
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
     needs: plan
     if: needs.plan.outputs.build_backend == 'true'
     uses: ./.github/workflows/pipeline-backend.yml
@@ -165,6 +167,9 @@ jobs:
 
   frontend:
     name: frontend
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
     needs: plan
     if: needs.plan.outputs.build_frontend == 'true'
     uses: ./.github/workflows/pipeline-frontend.yml
@@ -175,6 +180,9 @@ jobs:
 
   infra:
     name: infra
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
     needs: plan
     if: needs.plan.outputs.infra == 'true'
     uses: ./.github/workflows/pipeline-infra.yml
@@ -318,7 +326,7 @@ jobs:
       # Corre completo siempre: valida la combinación de versiones resultante.
       - name: Pruebas de aceptación E2E (flujo de contratación + Pub/Sub real)
         run: |
-          pip install pytest==9.2.0 requests==2.34.2
+          pip install --only-binary :all: --require-hashes -r tests/requirements.lock
           mkdir -p reports
           python -m pytest tests/e2e -v --junitxml=reports/e2e-junit.xml
       - name: Publicar reporte E2E
@@ -352,7 +360,7 @@ jobs:
           python-version: "3.11"
       - name: Smoke tests (versión de cada componente + salud del ambiente)
         run: |
-          pip install pytest==9.2.0 requests==2.34.2
+          pip install --only-binary :all: --require-hashes -r tests/requirements.lock
           mkdir -p reports
           python -m pytest tests/smoke -v --junitxml=reports/smoke-junit.xml
       - name: Publicar reporte smoke
@@ -366,6 +374,8 @@ jobs:
   # ── Marcar versiones estables ─────────────────────────────────────────────
   mark-stable:
     name: mark-stable
+    permissions:
+      contents: write # tag de versión en producción
     needs: [plan, deploy-backend, deploy-frontend, smoke-tests]
     if: always() && needs.smoke-tests.result == 'success'
     runs-on: ubuntu-latest

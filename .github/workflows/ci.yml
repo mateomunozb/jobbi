@@ -20,7 +20,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   changes:
@@ -71,6 +70,9 @@ jobs:
 
   backend:
     name: backend
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     uses: ./.github/workflows/pipeline-backend.yml
@@ -80,6 +82,9 @@ jobs:
 
   frontend:
     name: frontend
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     uses: ./.github/workflows/pipeline-frontend.yml
@@ -89,6 +94,9 @@ jobs:
 
   infra:
     name: infra
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
     needs: changes
     if: needs.changes.outputs.infra == 'true'
     uses: ./.github/workflows/pipeline-infra.yml

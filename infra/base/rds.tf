@@ -30,11 +30,17 @@ resource "aws_db_instance" "app" {
   publicly_accessible    = false
   multi_az               = false
 
-  # Ambiente académico: sin snapshots ni backups para poder destruirlo rápido.
-  backup_retention_period = 0
-  skip_final_snapshot     = true
-  deletion_protection     = false
-  apply_immediately       = true
+  # Cifrado en reposo con la llave administrada de AWS (aws/rds).
+  storage_encrypted = true
+
+  # Backups automáticos de 7 días (point-in-time recovery). Al destruir el
+  # ambiente se borran con la instancia y no se toma snapshot final, para que
+  # el Learner Lab se pueda limpiar rápido.
+  backup_retention_period  = 7
+  delete_automated_backups = true
+  skip_final_snapshot      = true
+  deletion_protection      = false
+  apply_immediately        = true
 }
 
 # Cadena de conexión de cada contexto como secreto (SecureString): ECS la

@@ -14,7 +14,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 env:
   TF_VERSION: "1.17.1"
@@ -45,6 +44,9 @@ jobs:
 
   security-sast:
     name: infra · security-sast
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

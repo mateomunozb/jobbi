@@ -23,7 +23,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 env:
   NODE_VERSION: "22"
@@ -61,6 +60,9 @@ jobs:
 
   security-sast:
     name: frontend · security-sast
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -83,6 +85,9 @@ jobs:
 
   security-sca:
     name: frontend · security-sca
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

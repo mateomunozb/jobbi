@@ -13,12 +13,16 @@ locals {
   }
 }
 
+# Tópicos cifrados con la llave administrada de AWS (aws/sns); las colas usan
+# SSE-SQS. Ninguna de las dos exige crear llaves KMS propias (LabRole).
 resource "aws_sns_topic" "contratacion_completada" {
-  name = "${local.name_prefix}-contratacion-completada-topic"
+  name              = "${local.name_prefix}-contratacion-completada-topic"
+  kms_master_key_id = "alias/aws/sns"
 }
 
 resource "aws_sns_topic" "billetera_bloqueada" {
-  name = "${local.name_prefix}-billetera-bloqueada-topic"
+  name              = "${local.name_prefix}-billetera-bloqueada-topic"
+  kms_master_key_id = "alias/aws/sns"
 }
 
 resource "aws_sqs_queue" "monetizacion_dlq" {

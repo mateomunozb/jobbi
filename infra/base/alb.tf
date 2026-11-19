@@ -10,7 +10,16 @@ resource "aws_lb" "app" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = data.aws_subnets.default.ids
   # El chat mantiene WebSockets abiertos: más margen que los 60 s por defecto.
-  idle_timeout = 300
+  idle_timeout               = 300
+  drop_invalid_header_fields = true
+
+  access_logs {
+    bucket  = aws_s3_bucket.alb_logs.id
+    prefix  = "alb"
+    enabled = true
+  }
+
+  depends_on = [aws_s3_bucket_policy.alb_logs]
 }
 
 resource "aws_lb_target_group" "frontend" {

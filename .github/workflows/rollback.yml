@@ -204,5 +204,5 @@ jobs:
 
       - name: Smoke tests
         run: |
-          pip install pytest==9.2.0 requests==2.34.2
+          pip install --only-binary :all: --require-hashes -r tests/requirements.lock
           python -m pytest tests/smoke -v
