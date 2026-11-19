@@ -1,0 +1,8 @@
+.venv/
+.datos/
+.logs/
+reports/
+tests/
+**/__pycache__/
+*.pyc
+.coverage

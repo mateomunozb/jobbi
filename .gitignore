@@ -29,3 +29,14 @@ tests/k6/resultados/
 
 # Bitácoras de los experimentos de fallos (scripts/caos)
 tests/caos/resultados/
+reports/
+.coverage
+
+# Terraform
+**/.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.*
+
+# Reportes de pruebas y análisis
+reports/

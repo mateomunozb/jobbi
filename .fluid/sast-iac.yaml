@@ -1,0 +1,15 @@
+# Fluid Attacks SAST · infraestructura como código (infra/, ci/)
+# Lo usa el pipeline del componente (fluidattacks/sast-action).
+language: ES
+# El build se rompe ante hallazgos de severidad alta o crítica (>= high).
+strict: true
+strictness_threshold: high
+output:
+  file_path: reports/fluid-sast-iac.sarif
+  format: SARIF
+sast:
+  include:
+    - infra
+    - ci
+  exclude:
+    - "**/.terraform"

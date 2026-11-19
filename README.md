@@ -10,6 +10,13 @@ Además incluye el **backend de microservicios** (`services/`), con un servicio 
 > (frontend, pruebas automatizadas, carga y estrés con k6):
 > **[docs/pubsub.md](docs/pubsub.md)**.
 
+> **CI/CD en AWS:** pipeline de GitHub Actions (CI con pruebas estáticas,
+> seguridad Fluid Attacks SAST/SCA, unitarias, cobertura e integración; CD con
+> Terraform a ECS Fargate en staging y production con pipelines independientes
+> para backend y frontend, pruebas pre/post-prod y
+> rollback automático y manual). Diseño, arquitectura y puesta en marcha:
+> **[docs/cicd.md](docs/cicd.md)**.
+
 ---
 
 ## ⚡ Arranque rápido

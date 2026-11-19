@@ -4,9 +4,8 @@ from datetime import date
 
 from pydantic import Field
 
-from common.esquemas import Esquema
-
 from common.enums import EstadoModeracion, EstadoVerificacion
+from common.esquemas import Esquema
 
 
 class AliadoVerificacion(Esquema):

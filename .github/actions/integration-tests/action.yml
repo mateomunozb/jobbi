@@ -1,0 +1,120 @@
+# Acción compuesta: pruebas de integración de contenedores.
+#
+# La usan los pipelines de backend y de frontend. Construye las DOS imágenes
+# (la del componente que cambió y la del otro, desde el mismo commit; Buildx
+# reutiliza la caché, así que la que no cambió se arma en segundos), levanta
+# ci/docker-compose.ci.yml (ALB simulado, PostgreSQL, LocalStack SNS/SQS y el
+# núcleo de servicios) y corre las mismas suites que luego corren en AWS.
+name: Pruebas de integración de contenedores
+description: Construye backend y frontend, levanta el ambiente efímero y corre tests/e2e + tests/smoke.
+
+inputs:
+  report-name:
+    description: Nombre del artefacto con el reporte JUnit.
+    required: true
+
+outputs:
+  backend_image:
+    description: Imagen local del backend probada.
+    value: ${{ steps.tags.outputs.backend_image }}
+  frontend_image:
+    description: Imagen local del frontend probada.
+    value: ${{ steps.tags.outputs.frontend_image }}
+
+runs:
+  using: composite
+  steps:
+    - name: Versiones por componente (hash del árbol de cada carpeta)
+      id: tags
+      shell: bash
+      run: |
+        backend=$(git rev-parse --short=12 HEAD:services)
+        frontend=$(git rev-parse --short=12 HEAD:frontend)
+        {
+          echo "backend=$backend"
+          echo "frontend=$frontend"
+          echo "backend_image=jobbi/backend:$backend"
+          echo "frontend_image=jobbi/frontend:$frontend"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+    - name: Build · imagen backend
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: services
+        tags: ${{ steps.tags.outputs.backend_image }}
+        load: true
+        cache-from: type=gha,scope=backend
+        cache-to: type=gha,scope=backend,mode=max
+
+    - name: Build · imagen frontend
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: frontend
+        tags: ${{ steps.tags.outputs.frontend_image }}
+        # Destino del WebSocket por rewrite: el servicio gateway del compose
+        # (en AWS el ALB ya enruta /ws/* directo al gateway).
+        build-args: API_GATEWAY_URL=http://gateway:8080
+        load: true
+        cache-from: type=gha,scope=frontend
+        cache-to: type=gha,scope=frontend,mode=max
+
+    # Contraseña aleatoria por run para la PostgreSQL efímera: sin credenciales
+    # fijas en el repositorio.
+    - name: Contraseña efímera de la base de datos
+      shell: bash
+      run: |
+        clave=$(openssl rand -hex 16)
+        echo "::add-mask::$clave"
+        echo "CI_DB_PASSWORD=$clave" >> "$GITHUB_ENV"
+
+    - name: Levantar ambiente de integración
+      shell: bash
+      env:
+        BACKEND_IMAGE: ${{ steps.tags.outputs.backend_image }}
+        FRONTEND_IMAGE: ${{ steps.tags.outputs.frontend_image }}
+        BACKEND_VERSION: ${{ steps.tags.outputs.backend }}
+        FRONTEND_VERSION: ${{ steps.tags.outputs.frontend }}
+      run: docker compose -f ci/docker-compose.ci.yml up -d --wait --wait-timeout 300
+
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.11"
+
+    - name: Pruebas E2E + smoke contra el ALB simulado
+      shell: bash
+      env:
+        APP_BASE_URL: http://localhost:8088
+        EXPECTED_BACKEND_VERSION: ${{ steps.tags.outputs.backend }}
+        EXPECTED_FRONTEND_VERSION: ${{ steps.tags.outputs.frontend }}
+      run: |
+        pip install --only-binary :all: --require-hashes -r tests/requirements.lock
+        mkdir -p reports
+        python -m pytest tests/e2e tests/smoke -v --junitxml=reports/integration-junit.xml
+
+    - name: Logs de los contenedores
+      if: failure()
+      shell: bash
+      env:
+        BACKEND_IMAGE: ${{ steps.tags.outputs.backend_image }}
+        FRONTEND_IMAGE: ${{ steps.tags.outputs.frontend_image }}
+      run: docker compose -f ci/docker-compose.ci.yml logs --no-color --tail=200
+
+    - name: Bajar ambiente de integración
+      if: always()
+      shell: bash
+      env:
+        BACKEND_IMAGE: ${{ steps.tags.outputs.backend_image }}
+        FRONTEND_IMAGE: ${{ steps.tags.outputs.frontend_image }}
+      run: docker compose -f ci/docker-compose.ci.yml down -v
+
+    - name: Publicar reporte de integración
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.report-name }}
+        path: reports/integration-junit.xml
+        if-no-files-found: ignore

@@ -194,6 +194,7 @@ def test_un_mensaje_ilegible_se_deja_para_reintento():
 def test_la_latencia_no_se_descuadra_con_fechas_en_utc():
     """k6 y la CLI mandan la hora en UTC ('...Z'); el servicio guarda hora local."""
     from datetime import datetime, timezone
+
     from monetizacion.tablas import EventoProcesadoFila
 
     sns_id = str(uuid.uuid4())

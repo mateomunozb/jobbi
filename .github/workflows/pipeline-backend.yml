@@ -1,0 +1,186 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline del BACKEND (services/): CI + Release, independiente del frontend.
+#
+#   Checkout → Build → Estáticas (Ruff+Bandit) → Seguridad (Fluid SAST/SCA)
+#   → Unitarias + cobertura → Integración de contenedores → Release (ECR)
+#
+# Lo invocan ci.yml (PR, sin publicar) y cd.yml (push, publica) solo cuando
+# cambió services/. El despliegue lo hace deploy-component.yml.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Pipeline backend
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Tag de la imagen (hash del árbol de services/)"
+        type: string
+        required: true
+      publish:
+        description: "Publicar la imagen en ECR"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+  TF_VERSION: "1.17.1"
+  AWS_REGION: us-east-1
+
+jobs:
+  static-analysis:
+    name: backend · static-analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: services/requirements-dev.lock
+      - name: Build · dependencias
+        run: |
+          pip install --only-binary :all: --require-hashes -r services/requirements-dev.lock
+      - name: Ruff (lint + reglas de seguridad Bandit)
+        working-directory: services
+        run: ruff check . --output-format=github
+
+  security-sast:
+    name: backend · security-sast
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - run: mkdir -p reports
+      - name: Fluid Attacks SAST (services/)
+        id: scan
+        uses: fluidattacks/sast-action@bff64d57fdf98653f41f55922c1b0b472dd6a954 # 1.3.0
+        with:
+          scan_config_path: .fluid/sast-backend.yaml
+          # PR: solo el código que cambia; push: todo el componente.
+          scanner_mode: ${{ github.event_name == 'pull_request' && 'diff' || 'full' }}
+      - name: Subir SARIF a GitHub Security
+        if: always() && steps.scan.outputs.sarif_file != ''
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif_file }}
+          category: fluid-sast-backend
+
+  security-sca:
+    name: backend · security-sca
+    permissions:
+      contents: read
+      security-events: write # SARIF de Fluid Attacks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - run: mkdir -p reports
+      - name: Fluid Attacks SCA (requirements)
+        id: scan
+        uses: fluidattacks/sca-action@4041124e360b62f382a16d552b8c71b1913aa249 # 1.2.0
+        with:
+          scan_config_path: .fluid/sca-backend.yaml
+          scanner_mode: ${{ github.event_name == 'pull_request' && 'diff' || 'full' }}
+      - name: Subir SARIF a GitHub Security
+        if: always() && steps.scan.outputs.sarif_file != ''
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif_file }}
+          category: fluid-sca-backend
+
+  unit-tests:
+    name: backend · unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: services/requirements-dev.lock
+      - name: Build · dependencias
+        run: |
+          pip install --only-binary :all: --require-hashes -r services/requirements-dev.lock
+      # SQLite temporal y SNS/SQS apagados (services/tests/conftest.py).
+      - name: Pytest + cobertura (mínimo 65 %)
+        working-directory: services
+        run: python -m pytest --cov-fail-under=65 -q
+      - name: Resumen de cobertura
+        if: always()
+        working-directory: services
+        run: |
+          {
+            echo "### Cobertura del backend"
+            echo '```'
+            python -m coverage report --rcfile=.coveragerc | tail -n 3
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publicar reportes (cobertura HTML/XML, JUnit)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-unit-test-reports
+          path: services/reports/
+
+  build-and-integration:
+    name: backend · build-and-integration
+    needs: [static-analysis, unit-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Build + pruebas de integración de contenedores
+        id: it
+        uses: ./.github/actions/integration-tests
+        with:
+          report-name: backend-integration-report
+      # El artefacto que se probó es el que se publica.
+      - name: Release · empaquetar la imagen probada
+        if: inputs.publish
+        env:
+          IMAGEN: ${{ steps.it.outputs.backend_image }}
+        run: docker save "$IMAGEN" | gzip > image.tar.gz
+      - name: Release · subir imagen como artefacto
+        if: inputs.publish
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-image-backend
+          path: image.tar.gz
+          retention-days: 1
+          compression-level: 0
+
+  release:
+    name: backend · release
+    if: inputs.publish
+    needs: [build-and-integration, security-sast, security-sca]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Configurar credenciales AWS (Academy)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Publicar en ECR
+        uses: ./.github/actions/release-image
+        with:
+          component: backend
+          image-tag: ${{ inputs.image_tag }}
+          terraform-version: ${{ env.TF_VERSION }}

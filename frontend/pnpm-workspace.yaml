@@ -3,3 +3,13 @@ pmOnFail: ignore
 minimumReleaseAgeExclude:
   - '@next/*'
   - next
+
+# Parches de seguridad en dependencias transitivas (job "security-sca"): las
+# fijan next, @tailwindcss/postcss y eslint-config-next y aún no publican
+# versiones con el arreglo. Retirar cada entrada cuando el paquete padre la suba.
+overrides:
+  nanoid@<3.3.18: ^3.3.18
+  browserslist@<4.28.7: ^4.28.7
+  baseline-browser-mapping@<2.11.0: ^2.11.0
+  source-map-js@<1.2.2: ^1.2.2
+  zod@<4.6.6: ^4.6.6

@@ -1,0 +1,25 @@
+# Análisis estático del backend (job "static-analysis" del pipeline de CI).
+# El código usa líneas de hasta ~120 caracteres; se fija ese límite en lugar de
+# reformatear todo el repositorio.
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", ".datos"]
+
+[lint]
+# E/W pycodestyle, F pyflakes, I orden de imports, B bugbear, S bandit (seguridad)
+select = ["E", "W", "F", "I", "B", "S"]
+ignore = [
+  "S101", # assert en tests
+  "S104", # bind a 0.0.0.0 es lo esperado dentro del contenedor
+  "B008", # Depends()/Query() en argumentos por defecto es idiomático en FastAPI
+]
+
+[lint.per-file-ignores]
+"**/tests/**" = ["S", "B"]
+
+[lint.isort]
+# Imports propios del backend: mismo orden se corra desde services/ o desde la raíz.
+known-first-party = [
+  "common", "gateway", "identidad", "mercado", "contrataciones", "comunicacion", "confianza",
+  "monetizacion", "soporte", "adquisicion", "proteccion", "verificacion_externa", "escalador_bd",
+]

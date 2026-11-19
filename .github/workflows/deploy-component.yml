@@ -1,0 +1,118 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Deploy App de UN componente (backend o frontend) en un ambiente.
+#
+# Re-aplica solo su capa de Terraform (infra/app-backend o infra/app-frontend)
+# con el tag nuevo, registra la versión en SSM (current-version) y espera a
+# que el ALB la sirva. El otro componente no se toca.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Deploy component
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        description: "backend | frontend"
+        type: string
+        required: true
+      environment:
+        description: "staging | production"
+        type: string
+        required: true
+      github_environment:
+        description: "Environment de GitHub (define si exige aprobación: production-approval)"
+        type: string
+        required: true
+      image_tag:
+        description: "Tag de imagen a desplegar"
+        type: string
+        required: true
+    outputs:
+      previous_version:
+        description: "Versión que estaba desplegada antes"
+        value: ${{ jobs.deploy.outputs.previous_version }}
+      alb_url:
+        value: ${{ jobs.deploy.outputs.alb_url }}
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.17.1"
+  TF_STATE_BUCKET: tfstate-jobbi-mateomunozb
+  COMPONENTE: ${{ inputs.component }}
+  ENVIRONMENT: ${{ inputs.environment }}
+  IMAGE_TAG: ${{ inputs.image_tag }}
+
+jobs:
+  deploy:
+    name: deploy ${{ inputs.component }} (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    # El gate de liberación vive en GitHub: production-approval tiene required
+    # reviewers (backend), production no (frontend), staging tampoco.
+    environment:
+      name: ${{ inputs.github_environment }}
+      url: ${{ steps.apply.outputs.alb_url }}
+    outputs:
+      previous_version: ${{ steps.previa.outputs.version }}
+      alb_url: ${{ steps.apply.outputs.alb_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configurar credenciales AWS (Academy)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Versión desplegada actualmente
+        id: previa
+        run: |
+          previa=$(aws ssm get-parameter --name "/jobbi/$ENVIRONMENT/$COMPONENTE/current-version" \
+            --query Parameter.Value --output text 2>/dev/null || echo none)
+          echo "version=$previa" >> "$GITHUB_OUTPUT"
+          echo "$COMPONENTE en $ENVIRONMENT: $previa → $IMAGE_TAG"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform apply (infra/app-${{ inputs.component }})
+        id: apply
+        working-directory: infra/app-${{ inputs.component }}
+        run: |
+          terraform init -input=false -backend-config=../backend.hcl
+          terraform workspace select -or-create "$ENVIRONMENT"
+          terraform apply -input=false -auto-approve -lock-timeout=5m \
+            -var "environment_name=$ENVIRONMENT" \
+            -var "tfstate_bucket=$TF_STATE_BUCKET" \
+            -var "image_tag=$IMAGE_TAG"
+          echo "alb_url=$(terraform output -raw alb_url)" >> "$GITHUB_OUTPUT"
+
+      - name: Registrar versión desplegada (SSM current-version)
+        run: |
+          aws ssm put-parameter --name "/jobbi/$ENVIRONMENT/$COMPONENTE/current-version" \
+            --value "$IMAGE_TAG" --type String --overwrite >/dev/null
+
+      - name: Esperar a que el ALB sirva la nueva versión
+        env:
+          ALB_URL: ${{ steps.apply.outputs.alb_url }}
+        run: scripts/esperar-version.sh "$ALB_URL" "$COMPONENTE" "$IMAGE_TAG"
+
+      - name: Resumen
+        if: always()
+        env:
+          PREVIA: ${{ steps.previa.outputs.version }}
+          ALB_URL: ${{ steps.apply.outputs.alb_url }}
+        run: |
+          {
+            echo "### 🚀 Deploy $COMPONENTE → $ENVIRONMENT"
+            echo "- Versión: \`${PREVIA:-none}\` → \`$IMAGE_TAG\`"
+            echo "- URL: ${ALB_URL:-—}"
+            echo "- Resultado: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"

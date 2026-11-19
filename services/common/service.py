@@ -23,7 +23,9 @@ from .observabilidad import instrumentar, log
 
 T = TypeVar("T")
 
-VERSION = "1.0.0"
+# Versión desplegada: el pipeline la fija con el SHA del commit (APP_VERSION) y
+# la verifica en /health tras cada despliegue, antes de correr las pruebas.
+VERSION = os.getenv("APP_VERSION", "1.0.0")
 
 
 def crear_servicio(*, nombre: str, contexto: str, descripcion: str) -> FastAPI:

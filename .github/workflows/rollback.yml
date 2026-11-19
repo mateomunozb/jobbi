@@ -1,0 +1,208 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Rollback de JOBBI, por componente.
+#
+#   • Automático: cd.yml lo invoca (workflow_call) con los componentes que
+#     desplegó en el run si fallan el despliegue o las pruebas posteriores.
+#   • Manual — BOTÓN DE PÁNICO: Actions → "Rollback" → Run workflow.
+#     Se elige ambiente y componente (backend, frontend o ambos); vuelve a la
+#     última versión buena de cada uno (SSM) o a la versión indicada.
+#
+# Solo re-aplica la capa del componente (infra/app-backend o
+# infra/app-frontend). La infraestructura base y el otro componente no se
+# tocan. Las imágenes de ECR son inmutables: el tag anterior es exactamente el
+# artefacto que ya estuvo en el ambiente.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Ambiente a revertir"
+        type: choice
+        options: [production, staging]
+        required: true
+      component:
+        description: "Componente a revertir"
+        type: choice
+        options: [ambos, backend, frontend]
+        required: true
+      version:
+        description: "Tag al que volver (solo con un componente; vacío = última versión buena)"
+        type: string
+        required: false
+      reason:
+        description: "Motivo (queda en el resumen del run)"
+        type: string
+        default: "Botón de pánico"
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      component:
+        type: string
+        required: true
+      version:
+        type: string
+        required: false
+        default: ""
+      reason:
+        type: string
+        default: "Rollback automático"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rollback-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.17.1"
+  TF_STATE_BUCKET: tfstate-jobbi-mateomunozb
+  ENVIRONMENT: ${{ inputs.environment }}
+
+jobs:
+  componentes:
+    name: componentes a revertir
+    runs-on: ubuntu-latest
+    outputs:
+      lista: ${{ steps.c.outputs.lista }}
+    steps:
+      - id: c
+        env:
+          COMPONENTE: ${{ inputs.component }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          case "$COMPONENTE" in
+            ambos) lista='["backend","frontend"]' ;;
+            backend|frontend) lista="[\"$COMPONENTE\"]" ;;
+            *) echo "::error::Componente inválido: $COMPONENTE"; exit 1 ;;
+          esac
+          if [ "$COMPONENTE" = ambos ] && [ -n "$VERSION" ]; then
+            echo "::error::Una versión explícita solo aplica a un componente (backend o frontend)"
+            exit 1
+          fi
+          echo "lista=$lista" >> "$GITHUB_OUTPUT"
+
+  rollback:
+    name: rollback ${{ matrix.component }} (${{ inputs.environment }})
+    needs: componentes
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: ${{ fromJSON(needs.componentes.outputs.lista) }}
+    env:
+      COMPONENTE: ${{ matrix.component }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configurar credenciales AWS (Academy)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolver versión destino
+        id: destino
+        env:
+          VERSION_PEDIDA: ${{ inputs.version }}
+        run: |
+          version="$VERSION_PEDIDA"
+          if [ -z "$version" ]; then
+            version=$(aws ssm get-parameter --name "/jobbi/$ENVIRONMENT/$COMPONENTE/last-good-version" \
+              --query Parameter.Value --output text)
+          fi
+          if [ -z "$version" ] || [ "$version" = "none" ]; then
+            echo "::error::No hay una versión buena registrada de $COMPONENTE en $ENVIRONMENT: no hay a dónde volver."
+            exit 1
+          fi
+          aws ecr describe-images --repository-name "jobbi/$COMPONENTE" --image-ids imageTag="$version" >/dev/null \
+            || { echo "::error::La imagen jobbi/$COMPONENTE:$version no existe en ECR"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Revirtiendo $COMPONENTE en $ENVIRONMENT a $version"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Re-desplegar la versión anterior (solo la capa del componente)
+        id: apply
+        working-directory: infra/app-${{ matrix.component }}
+        env:
+          VERSION: ${{ steps.destino.outputs.version }}
+        run: |
+          terraform init -input=false -backend-config=../backend.hcl
+          terraform workspace select "$ENVIRONMENT"
+          # -lock-timeout: si el despliegue fallido aún sostiene el lock, esperar.
+          terraform apply -input=false -auto-approve -lock-timeout=5m \
+            -var "environment_name=$ENVIRONMENT" \
+            -var "tfstate_bucket=$TF_STATE_BUCKET" \
+            -var "image_tag=$VERSION"
+          aws ssm put-parameter --name "/jobbi/$ENVIRONMENT/$COMPONENTE/current-version" \
+            --value "$VERSION" --type String --overwrite >/dev/null
+          echo "alb_url=$(terraform output -raw alb_url)" >> "$GITHUB_OUTPUT"
+
+      - name: Esperar a que el ALB sirva la versión restaurada
+        env:
+          ALB_URL: ${{ steps.apply.outputs.alb_url }}
+          VERSION: ${{ steps.destino.outputs.version }}
+        run: scripts/esperar-version.sh "$ALB_URL" "$COMPONENTE" "$VERSION"
+
+      - name: Resumen
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          VERSION: ${{ steps.destino.outputs.version }}
+        run: |
+          {
+            echo "### ⏪ Rollback de $COMPONENTE en $ENVIRONMENT"
+            echo "- Motivo: $REASON"
+            echo "- Versión restaurada: \`${VERSION:-—}\`"
+            echo "- Resultado: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Smoke del ambiente completo con la versión vigente de cada componente.
+  smoke:
+    name: smoke tras el rollback (${{ inputs.environment }})
+    needs: rollback
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configurar credenciales AWS (Academy)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Versiones vigentes y URL del ambiente
+        run: |
+          leer() { aws ssm get-parameter --name "/jobbi/$ENVIRONMENT/$1/current-version" --query Parameter.Value --output text; }
+          dns=$(aws elbv2 describe-load-balancers --names "jobbi-$ENVIRONMENT-alb" --query 'LoadBalancers[0].DNSName' --output text)
+          {
+            echo "APP_BASE_URL=http://$dns"
+            echo "EXPECTED_BACKEND_VERSION=$(leer backend)"
+            echo "EXPECTED_FRONTEND_VERSION=$(leer frontend)"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Smoke tests
+        run: |
+          pip install --only-binary :all: --require-hashes -r tests/requirements.lock
+          python -m pytest tests/smoke -v
