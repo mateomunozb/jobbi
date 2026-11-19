@@ -28,7 +28,6 @@ from contrataciones.tablas import ContratacionFila
 from gateway import main as gateway
 from monetizacion import main as monetizacion
 from monetizacion.billetera import aplicar_comision
-from monetizacion.repositorio import RepositorioBilleteras
 from monetizacion.comisiones import (
     ComisionCongelada,
     ComisionPlanFree,
@@ -36,6 +35,7 @@ from monetizacion.comisiones import (
     estrategia_de_cobro,
 )
 from monetizacion.especificaciones import UMBRAL_BLOQUEO, EspecificacionPrestadorBloqueado
+from monetizacion.repositorio import RepositorioBilleteras
 from monetizacion.sqs_worker import procesar_mensaje as procesar_en_monetizacion
 from monetizacion.tablas import EventoOutboxMonetizacionFila, PagoFila
 

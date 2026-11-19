@@ -30,7 +30,7 @@ from common.cobertura import en_cobertura
 from common.observabilidad import cabeceras_de_traza, log, muestras_de_colas, registrar_metricas
 from common.service import crear_servicio
 
-from .registro import SERVICIOS
+from .registro import ACTIVOS, SERVICIOS
 
 app = crear_servicio(
     nombre="gateway",
@@ -214,7 +214,7 @@ async def health_servicios():
             "status": datos.get("status") if datos else "DOWN",
         }
 
-    resultados = await asyncio.gather(*(sondear(n) for n in SERVICIOS))
+    resultados = await asyncio.gather(*(sondear(n) for n in ACTIVOS))
     caidos = [r for r in resultados if r["status"] != "UP"]
     return {
         "status": "UP" if not caidos else "DEGRADED",
@@ -234,6 +234,7 @@ def catalogo_servicios():
                 "nombre": nombre,
                 "contexto": info["contexto"],
                 "prefijoGateway": f"/api/{nombre}",
+                "desplegado": nombre in ACTIVOS,
                 # El Swagger de cada servicio se abre contra el servicio directo,
                 # no a través del proxy (sus assets usan rutas relativas).
                 "docsDelServicio": f"{info['url']}/docs",
@@ -561,7 +562,7 @@ async def bff_mensajes(
     por_contratacion = {c["id"]: c for c in contrataciones if c}
     ciclos = dict(zip(por_contratacion, await asyncio.gather(
         *(_ciclo(c) for c in por_contratacion.values())
-    )))
+    ), strict=True))
 
     items = []
     for chat in chats:

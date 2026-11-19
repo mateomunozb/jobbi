@@ -1,0 +1,117 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CI de Pull Requests (feature/* → develop, develop → main).
+#
+# Detecta qué componentes toca el PR y ejecuta SOLO sus pipelines:
+#   services/**            → pipeline-backend.yml
+#   frontend/**            → pipeline-frontend.yml
+#   infra/**               → pipeline-infra.yml
+#   ci/**, tests/**, .github/** → los que dependen de ellos (ver "changes")
+# SonarCloud (quality.yml) corre siempre. El job "ci-ok" resume todo y es el
+# único required check de la protección de ramas (los jobs omitidos por no
+# tener cambios no bloquean el merge).
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch: # corre todos los pipelines
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.d.outputs.backend }}
+      frontend: ${{ steps.d.outputs.frontend }}
+      infra: ${{ steps.d.outputs.infra }}
+      backend_tag: ${{ steps.d.outputs.backend_tag }}
+      frontend_tag: ${{ steps.d.outputs.frontend_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Detectar componentes afectados
+        id: d
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          EVENTO: ${{ github.event_name }}
+        run: |
+          if [ "$EVENTO" = "pull_request" ]; then
+            cambios=$(git diff --name-only "origin/$BASE_REF...HEAD")
+          else
+            cambios="services/ frontend/ infra/"   # ejecución manual: todo
+          fi
+          toca() { echo "$cambios" | grep -qE "$1" && echo true || echo false; }
+          comun='^(ci/|tests/|\.github/)'
+          backend=$(toca "^services/|$comun")
+          frontend=$(toca "^frontend/|$comun")
+          infra=$(toca '^(infra/|ci/|\.github/)')
+          {
+            echo "backend=$backend"
+            echo "frontend=$frontend"
+            echo "infra=$infra"
+            echo "backend_tag=$(git rev-parse --short=12 HEAD:services)"
+            echo "frontend_tag=$(git rev-parse --short=12 HEAD:frontend)"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Componentes afectados"
+            echo "| Componente | ¿Corre su pipeline? |"
+            echo "|---|---|"
+            echo "| backend | $backend |"
+            echo "| frontend | $frontend |"
+            echo "| infra | $infra |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  backend:
+    name: backend
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    uses: ./.github/workflows/pipeline-backend.yml
+    with:
+      image_tag: ${{ needs.changes.outputs.backend_tag }}
+    secrets: inherit
+
+  frontend:
+    name: frontend
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    uses: ./.github/workflows/pipeline-frontend.yml
+    with:
+      image_tag: ${{ needs.changes.outputs.frontend_tag }}
+    secrets: inherit
+
+  infra:
+    name: infra
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    uses: ./.github/workflows/pipeline-infra.yml
+    secrets: inherit
+
+  quality:
+    name: quality
+    uses: ./.github/workflows/quality.yml
+    secrets: inherit
+
+  # Único required check: falla si algún pipeline que corrió falló.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [changes, backend, frontend, infra, quality]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resultado del CI
+        env:
+          RESULTADOS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "Resultados: $RESULTADOS"
+          if echo "$RESULTADOS" | grep -qE '"(failure|cancelled)"'; then
+            echo "::error::Algún pipeline del CI falló"
+            exit 1
+          fi

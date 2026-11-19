@@ -32,7 +32,14 @@ def _url(nombre: str, host: str, puerto: int) -> str:
     return os.getenv(f"SERVICIO_{nombre.upper()}_URL", f"http://{host}:{puerto}")
 
 
+# Contextos desplegados en este ambiente. En AWS (ECS) solo se despliega el
+# núcleo del flujo de contratación; el resto sigue en el registro (sus rutas
+# responden 502 controlado) pero no cuenta para /health/servicios.
+# Ej.: SERVICIOS_ACTIVOS=identidad,mercado,contrataciones,comunicacion,confianza,monetizacion
+_ACTIVOS = {s.strip() for s in os.getenv("SERVICIOS_ACTIVOS", "").split(",") if s.strip()} or set(_DEFINICION)
+
 SERVICIOS: dict[str, dict[str, str]] = {
     nombre: {"url": _url(nombre, host, puerto), "contexto": contexto}
     for nombre, (host, puerto, contexto) in _DEFINICION.items()
 }
+ACTIVOS: list[str] = [nombre for nombre in SERVICIOS if nombre in _ACTIVOS]

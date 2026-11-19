@@ -121,7 +121,7 @@ class Backoff:
         espera = min(self.inicial * self.factor ** self.intentos, self.maximo)
         self.intentos += 1
         # ±20 %: varios hilos o Pods no reintentan todos en el mismo instante.
-        return espera * random.uniform(0.8, 1.2)
+        return espera * random.uniform(0.8, 1.2)  # noqa: S311 - jitter, no criptografía
 
     def reiniciar(self) -> None:
         self.intentos = 0

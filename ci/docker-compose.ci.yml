@@ -1,0 +1,113 @@
+# Ambiente efímero de integración para el job "integration-tests" del CI.
+#
+# Reproduce en el runner la topología de AWS con las imágenes recién construidas:
+#   alb (nginx, mismas reglas de ruteo que el ALB) → frontend / gateway
+#   gateway → contextos del núcleo → PostgreSQL (una base por contexto)
+#   contrataciones → SNS → SQS → monetizacion   (LocalStack)
+#
+# Las mismas pruebas que luego corren contra staging (tests/e2e) y producción
+# (tests/smoke) corren aquí contra http://localhost:8088 antes de publicar nada.
+#
+#   BACKEND_IMAGE=jobbi/backend:ci FRONTEND_IMAGE=jobbi/frontend:ci \
+#   BACKEND_VERSION=ci FRONTEND_VERSION=ci \
+#     docker compose -f ci/docker-compose.ci.yml up -d --wait
+
+x-backend: &backend
+  image: ${BACKEND_IMAGE:-jobbi/backend:ci}
+  restart: on-failure
+  depends_on:
+    postgres: { condition: service_healthy }
+    localstack: { condition: service_healthy }
+  healthcheck:
+    test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/health', timeout=3)"]
+    interval: 5s
+    timeout: 5s
+    retries: 30
+
+x-entorno: &entorno
+  APP_VERSION: ${BACKEND_VERSION:-ci}
+  CREAR_BASE_SI_FALTA: "true"
+  AWS_PROVEEDOR: localstack
+  AWS_ENDPOINT_URL: http://localstack:4566
+  AWS_REGION: us-east-1
+  SNS_TOPIC_NAME: contratacion-completada-topic
+  SNS_TOPIC_BILLETERA_BLOQUEADA: billetera-bloqueada-topic
+  QUEUE_NAME: monetizacion-events-queue
+  QUEUE_DLQ_NAME: monetizacion-events-dlq
+  QUEUE_COMUNICACION: comunicacion-events-queue
+  QUEUE_COMUNICACION_DLQ: comunicacion-events-dlq
+  SERVICIOS_ACTIVOS: identidad,mercado,contrataciones,comunicacion,confianza,monetizacion
+  SERVICIO_IDENTIDAD_URL: http://identidad:8001
+  SERVICIO_MERCADO_URL: http://mercado:8002
+  SERVICIO_CONTRATACIONES_URL: http://contrataciones:8003
+  SERVICIO_COMUNICACION_URL: http://comunicacion:8004
+  SERVICIO_CONFIANZA_URL: http://confianza:8005
+  SERVICIO_MONETIZACION_URL: http://monetizacion:8000
+  # No desplegados: un host inexistente responde rápido con error de conexión.
+  SERVICIO_SOPORTE_URL: http://soporte.invalid:8006
+  SERVICIO_ADQUISICION_URL: http://adquisicion.invalid:8007
+  SERVICIO_PROTECCION_URL: http://proteccion.invalid:8008
+  VERIFICACION_URL: http://verificacion-externa:8010
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: jobbi, POSTGRES_PASSWORD: jobbi, POSTGRES_DB: postgres }
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobbi"]
+      interval: 3s
+      retries: 20
+
+  localstack:
+    image: localstack/localstack:3.0.0
+    environment: { SERVICES: "sqs,sns", EAGER_SERVICE_LOADING: "1" }
+    volumes:
+      - ../scripts/init-aws-local.sh:/etc/localstack/init/ready.d/01-pubsub.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s localhost:4566/_localstack/init/ready | grep -q '\"completed\": true'"]
+      interval: 3s
+      retries: 40
+
+  identidad:
+    <<: *backend
+    environment: { <<: *entorno, SERVICE_MODULE: identidad, PORT: "8001", DATABASE_URL: "postgresql+psycopg://jobbi:jobbi@postgres:5432/jobbi_identidad" }
+  mercado:
+    <<: *backend
+    environment: { <<: *entorno, SERVICE_MODULE: mercado, PORT: "8002", DATABASE_URL: "postgresql+psycopg://jobbi:jobbi@postgres:5432/jobbi_mercado" }
+  contrataciones:
+    <<: *backend
+    environment: { <<: *entorno, SERVICE_MODULE: contrataciones, PORT: "8003", SNS_ENABLED: "true", DATABASE_URL: "postgresql+psycopg://jobbi:jobbi@postgres:5432/jobbi_contrataciones" }
+  comunicacion:
+    <<: *backend
+    environment: { <<: *entorno, SERVICE_MODULE: comunicacion, PORT: "8004", SQS_ENABLED: "true", DATABASE_URL: "postgresql+psycopg://jobbi:jobbi@postgres:5432/jobbi_comunicacion" }
+  confianza:
+    <<: *backend
+    environment: { <<: *entorno, SERVICE_MODULE: confianza, PORT: "8005", DATABASE_URL: "postgresql+psycopg://jobbi:jobbi@postgres:5432/jobbi_confianza" }
+  monetizacion:
+    <<: *backend
+    environment: { <<: *entorno, SERVICE_MODULE: monetizacion, PORT: "8000", SNS_ENABLED: "true", SQS_ENABLED: "true", DATABASE_URL: "postgresql+psycopg://jobbi:jobbi@postgres:5432/jobbi_monetizacion" }
+  verificacion-externa:
+    <<: *backend
+    depends_on: {}
+    environment: { <<: *entorno, SERVICE_MODULE: verificacion_externa, PORT: "8010" }
+  gateway:
+    <<: *backend
+    environment: { <<: *entorno, SERVICE_MODULE: gateway, PORT: "8080" }
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-jobbi/frontend:ci}
+    environment: { API_GATEWAY_URL: "http://gateway:8080", APP_VERSION: "${FRONTEND_VERSION:-ci}" }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 5s
+      retries: 30
+
+  # Hace las veces del ALB: mismas reglas de ruteo por ruta (ver infra/alb.tf).
+  alb:
+    image: nginx:1.27-alpine
+    ports: ["8088:80"]
+    volumes:
+      - ./alb-local.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      gateway: { condition: service_healthy }
+      frontend: { condition: service_healthy }

@@ -24,8 +24,13 @@ CONTRATACION_COMPLETADA = "CONTRATACION_COMPLETADA"
 # umbral de saldo pendiente (RN-04) y hay que avisarle.
 BILLETERA_BLOQUEADA = "BILLETERA_BLOQUEADA"
 
-AWS_ENDPOINT_URL = os.getenv(
-    "AWS_ENDPOINT_URL", "http://localstack.aws-local.svc.cluster.local:4566"
+# "localstack" (por defecto: Minikube y local) o "aws" (ECS en AWS real). Con
+# "aws" no se fija endpoint ni credenciales: boto3 usa su cadena por defecto, que
+# en Fargate toma el rol de la tarea (LabRole en AWS Academy).
+AWS_PROVEEDOR = os.getenv("AWS_PROVEEDOR", "localstack").lower()
+AWS_ENDPOINT_URL = (
+    None if AWS_PROVEEDOR == "aws"
+    else os.getenv("AWS_ENDPOINT_URL", "http://localstack.aws-local.svc.cluster.local:4566")
 )
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 
@@ -53,17 +58,26 @@ def desenvolver_sns(cuerpo_sqs: str) -> tuple[dict[str, Any], str | None]:
     return cuerpo, None
 
 
+def opciones_cliente() -> dict[str, Any]:
+    """Endpoint y credenciales según el proveedor (LocalStack o AWS real)."""
+    if AWS_PROVEEDOR == "aws":
+        return {"region_name": AWS_REGION}
+    return {
+        "endpoint_url": AWS_ENDPOINT_URL,
+        "region_name": AWS_REGION,
+        "aws_access_key_id": os.getenv("AWS_ACCESS_KEY_ID", "test"),
+        "aws_secret_access_key": os.getenv("AWS_SECRET_ACCESS_KEY", "test"),
+    }
+
+
 def cliente(servicio: str):
     """Cliente boto3 contra el endpoint configurado.
 
-    Los timeouts son cortos a propósito: si LocalStack no responde, el relay y
+    Los timeouts son cortos a propósito: si la mensajería no responde, el relay y
     el worker deben enterarse rápido y reintentar, no quedarse colgados.
     """
     return boto3.client(
         servicio,
-        endpoint_url=AWS_ENDPOINT_URL,
-        region_name=AWS_REGION,
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "test"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "test"),
+        **opciones_cliente(),
         config=Config(connect_timeout=3, read_timeout=20, retries={"max_attempts": 2}),
     )

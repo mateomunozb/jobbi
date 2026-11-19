@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from common.db import condiciones, listar, paginar_consulta
+from common.db import condiciones, paginar_consulta
 from common.enums import EstadoCuenta, EstadoVerificacion, PlanPrestador, valores
 from common.service import crear_servicio
 

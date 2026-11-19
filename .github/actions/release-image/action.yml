@@ -1,0 +1,62 @@
+# Acción compuesta: Release de la imagen de un componente en ECR.
+#
+# Requiere credenciales de AWS ya configuradas en el job. Asegura los
+# repositorios ECR con Terraform (infra/shared), carga la imagen que se probó
+# en el job de integración (artefacto docker save) y la publica con un tag
+# inmutable. Si el tag ya existe, no se vuelve a subir: es la misma imagen.
+name: Release de imagen a ECR
+description: Publica en ECR la imagen probada de un componente (backend o frontend).
+
+inputs:
+  component:
+    description: backend | frontend
+    required: true
+  image-tag:
+    description: Tag de la imagen (hash del árbol de la carpeta del componente).
+    required: true
+  terraform-version:
+    description: Versión de Terraform.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        terraform_wrapper: false
+
+    - name: IaC · repositorios ECR compartidos (infra/shared)
+      shell: bash
+      working-directory: infra/shared
+      run: |
+        terraform init -input=false -backend-config=../backend.hcl
+        # Los pipelines de backend y frontend pueden llegar aquí a la vez.
+        terraform apply -input=false -auto-approve -lock-timeout=5m
+
+    - name: Login en ECR
+      id: ecr
+      uses: aws-actions/amazon-ecr-login@7290e214a610b32bc0eef81748948b6d466a8783 # v2.2.0
+
+    - name: Descargar la imagen probada
+      uses: actions/download-artifact@v8
+      with:
+        name: docker-image-${{ inputs.component }}
+
+    - name: Publicar imagen (tag inmutable)
+      shell: bash
+      env:
+        COMPONENTE: ${{ inputs.component }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
+        REGISTRY: ${{ steps.ecr.outputs.registry }}
+      run: |
+        destino="$REGISTRY/jobbi/$COMPONENTE:$IMAGE_TAG"
+        if aws ecr describe-images --repository-name "jobbi/$COMPONENTE" --image-ids imageTag="$IMAGE_TAG" >/dev/null 2>&1; then
+          echo "✓ $destino ya existe: se reutiliza (build once, deploy many)"
+        else
+          gunzip -c image.tar.gz | docker load
+          docker tag "jobbi/$COMPONENTE:$IMAGE_TAG" "$destino"
+          docker push "$destino"
+        fi
+        echo "### Release $COMPONENTE: \`$destino\`" >> "$GITHUB_STEP_SUMMARY"

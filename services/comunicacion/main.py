@@ -11,7 +11,7 @@ en tiempo real por WebSocket (`/ws/conversaciones/{id}`, ver `salas.py`).
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 
 import anyio
 from fastapi import Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -21,8 +21,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.concurrency import run_in_threadpool
 
-from common.db import condiciones, inicializar, nuevo_id, paginar_consulta
 from common import eventos
+from common.db import condiciones, inicializar, nuevo_id, paginar_consulta
 from common.observabilidad import muestras_de_colas, registrar_metricas
 from common.service import crear_servicio
 

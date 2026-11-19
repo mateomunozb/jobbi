@@ -112,7 +112,7 @@ def test_el_log_es_json_con_los_campos_acordados():
 # --- Match rate: búsqueda registrada y contacto que la cita ------------------
 
 def _metrica(texto: str, nombre: str) -> float:
-    return next(float(l.split()[-1]) for l in texto.splitlines() if l.startswith(nombre + " "))
+    return next(float(linea.split()[-1]) for linea in texto.splitlines() if linea.startswith(nombre + " "))
 
 
 def test_el_contacto_que_nace_de_una_busqueda_cuenta_para_el_match_rate():

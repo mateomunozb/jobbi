@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from common.esquemas import Esquema
-
 from common.enums import EstadoContratacion, MedioPago
+from common.esquemas import Esquema
 
 
 class AcuerdoTarifa(Esquema):

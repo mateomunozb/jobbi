@@ -1,0 +1,440 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CD de JOBBI — orquestador de pipelines independientes por componente.
+#
+#   plan ─┬─ pipeline-backend  (CI + release)   solo si la imagen no existe
+#         ├─ pipeline-frontend (CI + release)   solo si la imagen no existe
+#         ├─ pipeline-infra    (validación IaC) solo si cambió infra/ o ci/
+#         └─ quality           (SonarCloud)
+#   → deploy-infra (IaC base; aprobación en production solo si cambia la base)
+#   → deploy-backend  (production: ENTREGA continua, aprobación manual)
+#   → deploy-frontend (production: DESPLIEGUE continuo, sin aprobación)
+#     (solo los componentes que cambiaron)
+#   → tests-preprod (E2E, staging) → smoke-tests → mark-stable | rollback
+#
+# GitFlow simplificado:  push develop → staging   ·   push main → production
+#
+# Cada componente se versiona con el hash de SU carpeta (services/, frontend/)
+# y solo se despliega si esa versión difiere de la que corre en el ambiente
+# (SSM /jobbi/<env>/<componente>/current-version). Si algo falla después de
+# desplegar, se revierten solo los componentes desplegados en este run.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CD
+
+on:
+  push:
+    branches: [develop, main]
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+    inputs:
+      forzar:
+        description: "Re-desplegar ambos componentes aunque no hayan cambiado"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # tag de versión en producción
+  security-events: write # SARIF de Fluid Attacks
+
+# Nunca cancelar un despliegue en curso: un terraform apply a medias deja el
+# estado bloqueado.
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.17.1"
+  TF_STATE_BUCKET: tfstate-jobbi-mateomunozb
+  ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+
+jobs:
+  # ── Plan: qué componentes construir y desplegar ───────────────────────────
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      backend_tag: ${{ steps.p.outputs.backend_tag }}
+      frontend_tag: ${{ steps.p.outputs.frontend_tag }}
+      build_backend: ${{ steps.p.outputs.build_backend }}
+      build_frontend: ${{ steps.p.outputs.build_frontend }}
+      deploy_backend: ${{ steps.p.outputs.deploy_backend }}
+      deploy_frontend: ${{ steps.p.outputs.deploy_frontend }}
+      infra: ${{ steps.p.outputs.infra }}
+      release: ${{ steps.p.outputs.release }}
+      env_infra: ${{ steps.p.outputs.env_infra }}
+      env_backend: ${{ steps.p.outputs.env_backend }}
+      env_frontend: ${{ steps.p.outputs.env_frontend }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configurar credenciales AWS (Academy)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Calcular plan de despliegue
+        id: p
+        env:
+          ANTES: ${{ github.event.before }}
+          FORZAR: ${{ inputs.forzar || false }}
+        run: |
+          # Archivos cambiados en este push (primer push de la rama o manual: todo).
+          if [ -n "$ANTES" ] && [ "$ANTES" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$ANTES" 2>/dev/null; then
+            cambios=$(git diff --name-only "$ANTES" HEAD)
+          else
+            cambios="infra/ ci/"
+          fi
+          toca() { echo "$cambios" | grep -qE "$1" && echo true || echo false; }
+
+          echo "| Componente | Versión deseada | Desplegada | ¿Build? | ¿Deploy? |" > plan.md
+          echo "|---|---|---|---|---|" >> plan.md
+          for c in backend frontend; do
+            carpeta=$([ "$c" = backend ] && echo services || echo frontend)
+            tag=$(git rev-parse --short=12 "HEAD:$carpeta")
+            actual=$(aws ssm get-parameter --name "/jobbi/$ENVIRONMENT/$c/current-version" \
+              --query Parameter.Value --output text 2>/dev/null || echo none)
+            # Ya existe en ECR = ya pasó su CI (se publicó tras las pruebas): no se reconstruye.
+            if aws ecr describe-images --repository-name "jobbi/$c" --image-ids imageTag="$tag" >/dev/null 2>&1; then
+              build=false
+            else
+              build=true
+            fi
+            # Se despliega si cambió la imagen o la IaC de su capa, o si se fuerza.
+            if [ "$tag" != "$actual" ] || [ "$(toca "^infra/app-$c/")" = true ] || [ "$FORZAR" = true ]; then
+              deploy=true
+            else
+              deploy=false
+            fi
+            echo "${c}_tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "build_$c=$build" >> "$GITHUB_OUTPUT"
+            echo "deploy_$c=$deploy" >> "$GITHUB_OUTPUT"
+            echo "| $c | \`$tag\` | \`$actual\` | $build | $deploy |" >> plan.md
+          done
+          infra=$(toca '^(infra/|ci/)')
+          echo "infra=$infra" >> "$GITHUB_OUTPUT"
+          echo "release=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+
+          # Environments de GitHub = estrategia de liberación por componente:
+          #   backend  → entrega continua    (production-approval: required reviewers)
+          #   frontend → despliegue continuo (production: sin aprobación)
+          #   infra base → aprobación solo si cambia infra/base/ o es el primer despliegue
+          if [ "$ENVIRONMENT" = production ]; then
+            base_existe=$(aws ssm get-parameter --name "/jobbi/production/backend/current-version" \
+              >/dev/null 2>&1 && echo true || echo false)
+            if [ "$(toca '^infra/base/')" = true ] || [ "$base_existe" = false ] || [ "$FORZAR" = true ]; then
+              env_infra=production-approval
+            else
+              env_infra=production
+            fi
+            env_backend=production-approval
+            env_frontend=production
+          else
+            env_infra=staging; env_backend=staging; env_frontend=staging
+          fi
+          {
+            echo "env_infra=$env_infra"
+            echo "env_backend=$env_backend"
+            echo "env_frontend=$env_frontend"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Plan de despliegue → $ENVIRONMENT"
+            cat plan.md
+            echo
+            echo "Validación de IaC (pipeline-infra): $infra"
+            echo
+            echo "Environments: infra \`$env_infra\` · backend \`$env_backend\` · frontend \`$env_frontend\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Pipelines independientes por componente (CI + Release) ────────────────
+  backend:
+    name: backend
+    needs: plan
+    if: needs.plan.outputs.build_backend == 'true'
+    uses: ./.github/workflows/pipeline-backend.yml
+    with:
+      image_tag: ${{ needs.plan.outputs.backend_tag }}
+      publish: true
+    secrets: inherit
+
+  frontend:
+    name: frontend
+    needs: plan
+    if: needs.plan.outputs.build_frontend == 'true'
+    uses: ./.github/workflows/pipeline-frontend.yml
+    with:
+      image_tag: ${{ needs.plan.outputs.frontend_tag }}
+      publish: true
+    secrets: inherit
+
+  infra:
+    name: infra
+    needs: plan
+    if: needs.plan.outputs.infra == 'true'
+    uses: ./.github/workflows/pipeline-infra.yml
+    secrets: inherit
+
+  quality:
+    name: quality
+    uses: ./.github/workflows/quality.yml
+    secrets: inherit
+
+  # ── IaC + Deploy Infra (capa base) ────────────────────────────────────────
+  deploy-infra:
+    name: deploy-infra (${{ github.ref_name == 'main' && 'production' || 'staging' }})
+    needs: [plan, backend, frontend, infra, quality]
+    # Continúa aunque un pipeline se haya omitido (sin cambios), nunca si falló.
+    # Si no hay nada que desplegar (p. ej. solo cambiaron pruebas), no corre.
+    if: >-
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled') &&
+      (needs.plan.outputs.deploy_backend == 'true' ||
+       needs.plan.outputs.deploy_frontend == 'true' ||
+       needs.plan.outputs.infra == 'true')
+    runs-on: ubuntu-latest
+    # production-approval (required reviewers) solo si cambia la capa base o es
+    # el primer despliegue; si no, production (libre) para no frenar al frontend.
+    environment:
+      name: ${{ needs.plan.outputs.env_infra }}
+    env:
+      ENV_GITHUB: ${{ needs.plan.outputs.env_infra }}
+    outputs:
+      alb_url: ${{ steps.out.outputs.alb_url }}
+    defaults:
+      run:
+        working-directory: infra/base
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configurar credenciales AWS (Academy)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init + workspace
+        run: |
+          terraform init -input=false -backend-config=../backend.hcl
+          terraform workspace select -or-create "$ENVIRONMENT"
+
+      # -detailed-exitcode: 0 = sin cambios, 2 = hay cambios, 1 = error.
+      - name: Terraform plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -input=false -detailed-exitcode -out=base.tfplan -var "environment_name=$ENVIRONMENT"
+          codigo=$?
+          set -e
+          [ "$codigo" -eq 1 ] && exit 1
+          echo "cambios=$([ "$codigo" -eq 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Infraestructura base ($ENVIRONMENT)"
+            echo '```'
+            terraform show -no-color base.tfplan | tail -n 30
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Salvaguarda: un drift en la base de producción nunca se aplica sin aprobación.
+      - name: Exigir aprobación para cambios no previstos en producción
+        if: steps.plan.outputs.cambios == 'true' && env.ENV_GITHUB == 'production'
+        run: |
+          echo "::error::La capa base de production tiene cambios (drift) sin aprobación. Revisa el plan y ejecuta CD manualmente en main con 'forzar' (pasa por production-approval)."
+          exit 1
+
+      - name: Terraform apply (red, ALB, RDS, SNS/SQS, cluster ECS)
+        if: steps.plan.outputs.cambios == 'true'
+        run: terraform apply -input=false -auto-approve base.tfplan
+
+      - id: out
+        run: echo "alb_url=$(terraform output -raw alb_url)" >> "$GITHUB_OUTPUT"
+
+  # ── Deploy App por componente ─────────────────────────────────────────────
+  # El backend va primero: si cambian ambos, el frontend nuevo encuentra ya la
+  # API nueva (los cambios de API deben ser retrocompatibles: expand/contract).
+  deploy-backend:
+    name: deploy-backend
+    needs: [plan, deploy-infra]
+    if: always() && needs.deploy-infra.result == 'success' && needs.plan.outputs.deploy_backend == 'true'
+    uses: ./.github/workflows/deploy-component.yml
+    with:
+      component: backend
+      environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      github_environment: ${{ needs.plan.outputs.env_backend }}
+      image_tag: ${{ needs.plan.outputs.backend_tag }}
+    secrets: inherit
+
+  deploy-frontend:
+    name: deploy-frontend
+    needs: [plan, deploy-infra, deploy-backend]
+    if: >-
+      always() &&
+      needs.deploy-infra.result == 'success' &&
+      needs.deploy-backend.result != 'failure' &&
+      needs.plan.outputs.deploy_frontend == 'true'
+    uses: ./.github/workflows/deploy-component.yml
+    with:
+      component: frontend
+      environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      github_environment: ${{ needs.plan.outputs.env_frontend }}
+      image_tag: ${{ needs.plan.outputs.frontend_tag }}
+    secrets: inherit
+
+  # ── Tests pre-prod: aceptación E2E en staging ─────────────────────────────
+  tests-preprod:
+    name: tests-preprod (E2E staging)
+    needs: [deploy-infra, deploy-backend, deploy-frontend]
+    if: >-
+      always() &&
+      github.ref_name != 'main' &&
+      needs.deploy-infra.result == 'success' &&
+      !contains(needs.*.result, 'failure') &&
+      (needs.deploy-backend.result == 'success' || needs.deploy-frontend.result == 'success')
+    runs-on: ubuntu-latest
+    env:
+      APP_BASE_URL: ${{ needs.deploy-infra.outputs.alb_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      # Corre completo siempre: valida la combinación de versiones resultante.
+      - name: Pruebas de aceptación E2E (flujo de contratación + Pub/Sub real)
+        run: |
+          pip install pytest==9.2.0 requests==2.34.2
+          mkdir -p reports
+          python -m pytest tests/e2e -v --junitxml=reports/e2e-junit.xml
+      - name: Publicar reporte E2E
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-staging-report
+          path: reports/e2e-junit.xml
+          if-no-files-found: ignore
+
+  # ── Tests post-deploy: smoke ──────────────────────────────────────────────
+  smoke-tests:
+    name: smoke-tests (${{ github.ref_name == 'main' && 'production' || 'staging' }})
+    needs: [plan, deploy-infra, deploy-backend, deploy-frontend, tests-preprod]
+    if: >-
+      always() &&
+      needs.deploy-infra.result == 'success' &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    env:
+      APP_BASE_URL: ${{ needs.deploy-infra.outputs.alb_url }}
+      EXPECTED_BACKEND_VERSION: ${{ needs.plan.outputs.backend_tag }}
+      EXPECTED_FRONTEND_VERSION: ${{ needs.plan.outputs.frontend_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Smoke tests (versión de cada componente + salud del ambiente)
+        run: |
+          pip install pytest==9.2.0 requests==2.34.2
+          mkdir -p reports
+          python -m pytest tests/smoke -v --junitxml=reports/smoke-junit.xml
+      - name: Publicar reporte smoke
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-report-${{ env.ENVIRONMENT }}
+          path: reports/smoke-junit.xml
+          if-no-files-found: ignore
+
+  # ── Marcar versiones estables ─────────────────────────────────────────────
+  mark-stable:
+    name: mark-stable
+    needs: [plan, deploy-backend, deploy-frontend, smoke-tests]
+    if: always() && needs.smoke-tests.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configurar credenciales AWS (Academy)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Registrar última versión buena por componente (SSM)
+        env:
+          BACKEND_DESPLEGADO: ${{ needs.deploy-backend.result == 'success' }}
+          FRONTEND_DESPLEGADO: ${{ needs.deploy-frontend.result == 'success' }}
+          BACKEND_TAG: ${{ needs.plan.outputs.backend_tag }}
+          FRONTEND_TAG: ${{ needs.plan.outputs.frontend_tag }}
+        run: |
+          echo "### ✅ $ENVIRONMENT estable" >> "$GITHUB_STEP_SUMMARY"
+          for c in backend frontend; do
+            desplegado=$([ "$c" = backend ] && echo "$BACKEND_DESPLEGADO" || echo "$FRONTEND_DESPLEGADO")
+            tag=$([ "$c" = backend ] && echo "$BACKEND_TAG" || echo "$FRONTEND_TAG")
+            if [ "$desplegado" = true ]; then
+              aws ssm put-parameter --name "/jobbi/$ENVIRONMENT/$c/last-good-version" \
+                --value "$tag" --type String --overwrite >/dev/null
+              echo "- $c: \`$tag\` (nueva versión estable)" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- $c: \`$tag\` (sin cambios)" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Tag de versión semántica (solo producción)
+        if: github.ref_name == 'main'
+        env:
+          RELEASE: ${{ needs.plan.outputs.release }}
+          BACKEND_TAG: ${{ needs.plan.outputs.backend_tag }}
+          FRONTEND_TAG: ${{ needs.plan.outputs.frontend_tag }}
+        run: |
+          tag="v$RELEASE"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "El tag $tag ya existe (sube VERSION para una nueva versión)."
+            exit 0
+          fi
+          git tag -a "$tag" -m "JOBBI $tag (backend $BACKEND_TAG, frontend $FRONTEND_TAG)"
+          git push origin "$tag"
+          echo "Release etiquetado: \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Rollback automático ───────────────────────────────────────────────────
+  # Si falla un despliegue o una prueba posterior, se revierten SOLO los
+  # componentes que este run desplegó; el otro sigue en su versión.
+  rollback:
+    name: rollback automático
+    needs: [deploy-infra, deploy-backend, deploy-frontend, tests-preprod, smoke-tests]
+    if: >-
+      always() &&
+      needs.deploy-infra.result == 'success' &&
+      (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'failure' ||
+       needs.deploy-frontend.result == 'success' || needs.deploy-frontend.result == 'failure') &&
+      (needs.deploy-backend.result == 'failure' || needs.deploy-frontend.result == 'failure' ||
+       needs.tests-preprod.result == 'failure' || needs.smoke-tests.result == 'failure')
+    uses: ./.github/workflows/rollback.yml
+    with:
+      environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      component: >-
+        ${{ (needs.deploy-backend.result != 'skipped' && needs.deploy-frontend.result != 'skipped') && 'ambos'
+            || (needs.deploy-backend.result != 'skipped' && 'backend' || 'frontend') }}
+      reason: "Rollback automático: fallaron el despliegue o las pruebas del run ${{ github.run_id }}"
+    secrets: inherit
