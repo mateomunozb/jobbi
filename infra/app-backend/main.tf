@@ -60,18 +60,21 @@ locals {
   base        = data.terraform_remote_state.base.outputs
 
   # Núcleo del flujo de contratación desplegado en AWS. Todos corren la misma
-  # imagen de backend con distinto SERVICE_MODULE.
-  #   dns: nombre con el que los demás lo llaman por Service Connect
+  # imagen de backend con distinto SERVICE_MODULE. Los puertos coinciden con
+  # los listeners del ALB interno (infra/base/main.tf: servicios_internos).
   backend = {
-    gateway              = { module = "gateway", port = 8080, dns = "gateway", env = {} }
-    identidad            = { module = "identidad", port = 8001, dns = "identidad", env = {} }
-    mercado              = { module = "mercado", port = 8002, dns = "mercado", env = {} }
-    contrataciones       = { module = "contrataciones", port = 8003, dns = "contrataciones", env = { SNS_ENABLED = "true" } }
-    comunicacion         = { module = "comunicacion", port = 8004, dns = "comunicacion", env = { SQS_ENABLED = "true" } }
-    confianza            = { module = "confianza", port = 8005, dns = "confianza", env = { VERIFICACION_REINTENTOS = "true" } }
-    monetizacion         = { module = "monetizacion", port = 8000, dns = "monetizacion", env = { SNS_ENABLED = "true", SQS_ENABLED = "true", SQS_HILOS = "2" } }
-    verificacion_externa = { module = "verificacion_externa", port = 8010, dns = "verificacion-externa", env = { PORCENTAJE_RECHAZO = "20" } }
+    gateway              = { module = "gateway", port = 8080, env = {} }
+    identidad            = { module = "identidad", port = 8001, env = {} }
+    mercado              = { module = "mercado", port = 8002, env = {} }
+    contrataciones       = { module = "contrataciones", port = 8003, env = { SNS_ENABLED = "true" } }
+    comunicacion         = { module = "comunicacion", port = 8004, env = { SQS_ENABLED = "true" } }
+    confianza            = { module = "confianza", port = 8005, env = { VERIFICACION_REINTENTOS = "true" } }
+    monetizacion         = { module = "monetizacion", port = 8000, env = { SNS_ENABLED = "true", SQS_ENABLED = "true", SQS_HILOS = "2" } }
+    verificacion_externa = { module = "verificacion_externa", port = 8010, env = { PORCENTAJE_RECHAZO = "20" } }
   }
+
+  # Los servicios se llaman entre sí por el ALB interno: http://<dns>:<puerto>.
+  interno = "http://${local.base.alb_interno_dns}"
 
   contextos_activos = ["identidad", "mercado", "contrataciones", "comunicacion", "confianza", "monetizacion"]
 
@@ -84,7 +87,7 @@ locals {
       CREAR_BASE_SI_FALTA = "true"
       LOG_LEVEL           = "INFO"
       SERVICIOS_ACTIVOS   = join(",", local.contextos_activos)
-      VERIFICACION_URL    = "http://verificacion-externa:8010"
+      VERIFICACION_URL    = "${local.interno}:${local.backend.verificacion_externa.port}"
 
       # Contextos no desplegados en AWS: host inexistente → 502 controlado.
       SERVICIO_SOPORTE_URL     = "http://soporte.invalid:8006"
@@ -92,7 +95,7 @@ locals {
       SERVICIO_PROTECCION_URL  = "http://proteccion.invalid:8008"
     },
     { for nombre in local.contextos_activos :
-      "SERVICIO_${upper(nombre)}_URL" => "http://${local.backend[nombre].dns}:${local.backend[nombre].port}"
+      "SERVICIO_${upper(nombre)}_URL" => "${local.interno}:${local.backend[nombre].port}"
     },
   )
 }

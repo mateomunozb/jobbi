@@ -13,8 +13,14 @@ output "cluster_name" {
   value = aws_ecs_cluster.app.name
 }
 
-output "service_connect_namespace_arn" {
-  value = aws_service_discovery_http_namespace.app.arn
+output "alb_interno_dns" {
+  description = "DNS del ALB interno: los servicios se llaman como http://<dns>:<puerto>."
+  value       = aws_lb.interno.dns_name
+}
+
+output "internal_target_group_arns" {
+  description = "Target group del ALB interno de cada servicio del backend."
+  value       = { for nombre, tg in aws_lb_target_group.interno : nombre => tg.arn }
 }
 
 output "subnet_ids" {

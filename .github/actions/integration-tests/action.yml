@@ -54,7 +54,7 @@ runs:
       with:
         context: frontend
         tags: ${{ steps.tags.outputs.frontend_image }}
-        # Destino del WebSocket por rewrite: el gateway por Service Connect
+        # Destino del WebSocket por rewrite: el servicio gateway del compose
         # (en AWS el ALB ya enruta /ws/* directo al gateway).
         build-args: API_GATEWAY_URL=http://gateway:8080
         load: true
