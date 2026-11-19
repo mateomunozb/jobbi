@@ -40,7 +40,7 @@ jobs:
             echo "::endgroup::"
           done
       - name: Docker Compose de integración (sintaxis)
-        run: docker compose -f ci/docker-compose.ci.yml config --quiet
+        run: CI_DB_PASSWORD=solo-validacion docker compose -f ci/docker-compose.ci.yml config --quiet
 
   security-sast:
     name: infra · security-sast

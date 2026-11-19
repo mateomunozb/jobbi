@@ -12,6 +12,8 @@ resource "aws_lb" "app" {
   # El chat mantiene WebSockets abiertos: más margen que los 60 s por defecto.
   idle_timeout               = 300
   drop_invalid_header_fields = true
+  # Protección contra borrado: destroy.yml la desactiva antes de destruir.
+  enable_deletion_protection = true
 
   access_logs {
     bucket  = aws_s3_bucket.alb_logs.id

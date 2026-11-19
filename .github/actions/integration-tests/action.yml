@@ -61,6 +61,15 @@ runs:
         cache-from: type=gha,scope=frontend
         cache-to: type=gha,scope=frontend,mode=max
 
+    # Contraseña aleatoria por run para la PostgreSQL efímera: sin credenciales
+    # fijas en el repositorio.
+    - name: Contraseña efímera de la base de datos
+      shell: bash
+      run: |
+        clave=$(openssl rand -hex 16)
+        echo "::add-mask::$clave"
+        echo "CI_DB_PASSWORD=$clave" >> "$GITHUB_ENV"
+
     - name: Levantar ambiente de integración
       shell: bash
       env:

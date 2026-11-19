@@ -39,8 +39,14 @@ resource "aws_db_instance" "app" {
   backup_retention_period  = 7
   delete_automated_backups = true
   skip_final_snapshot      = true
-  deletion_protection      = false
-  apply_immediately        = true
+  # Protección contra borrado accidental: destroy.yml la desactiva de forma
+  # explícita antes de destruir el ambiente (doble llave).
+  deletion_protection = true
+
+  # Habilita la autenticación con tokens IAM además de usuario y contraseña.
+  iam_database_authentication_enabled = true
+
+  apply_immediately = true
 }
 
 # Cadena de conexión de cada contexto como secreto (SecureString): ECS la

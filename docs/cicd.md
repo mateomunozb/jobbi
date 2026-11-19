@@ -306,6 +306,7 @@ uv pip compile tests/requirements.in --universal --generate-hashes --python-vers
 # Ambiente de integración local (requiere Docker)
 docker build -t jobbi/backend:ci services
 docker build -t jobbi/frontend:ci --build-arg API_GATEWAY_URL=http://gateway:8080 frontend
+export CI_DB_PASSWORD=$(openssl rand -hex 16)   # contraseña efímera de la PostgreSQL de CI
 docker compose -f ci/docker-compose.ci.yml up -d --wait
 APP_BASE_URL=http://localhost:8088 python -m pytest tests/e2e tests/smoke -v
 docker compose -f ci/docker-compose.ci.yml down -v
