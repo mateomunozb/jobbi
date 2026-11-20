@@ -16,7 +16,8 @@ def test_version_reporta_ambiente_y_version_del_backend(monkeypatch):
     with TestClient(gateway.app) as cliente:
         respuesta = cliente.get("/api/version")
     assert respuesta.status_code == 200
-    assert respuesta.json() == {"ambiente": "staging", "backend": VERSION}
+    assert respuesta.json() == {
+        "ambiente": "staging", "backend": VERSION, "contextosActivos": len(gateway.ACTIVOS)}
 
 
 def test_version_no_se_confunde_con_el_proxy():

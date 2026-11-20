@@ -232,7 +232,7 @@ async def health_servicios():
 @app.get("/api/version", tags=["operación"],
          summary="Ambiente y versión del backend desplegada")
 def version():
-    return {"ambiente": AMBIENTE, "backend": VERSION}
+    return {"ambiente": AMBIENTE, "backend": VERSION, "contextosActivos": len(ACTIVOS)}
 
 
 @app.get("/api/servicios", tags=["operación"],
