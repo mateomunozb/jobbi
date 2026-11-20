@@ -425,6 +425,14 @@ jobs:
               aws ssm put-parameter --name "/jobbi/$ENVIRONMENT/$c/last-good-version" \
                 --value "$tag" --type String --overwrite >/dev/null
               echo "- $c: \`$tag\` (nueva versión estable)" >> "$GITHUB_STEP_SUMMARY"
+            elif ! aws ssm get-parameter --name "/jobbi/$ENVIRONMENT/$c/last-good-version" >/dev/null 2>&1; then
+              # Sin last-good (p. ej. el run que desplegó se canceló antes del
+              # smoke): la versión que corre acaba de pasar el smoke, se registra.
+              actual=$(aws ssm get-parameter --name "/jobbi/$ENVIRONMENT/$c/current-version" \
+                --query Parameter.Value --output text)
+              aws ssm put-parameter --name "/jobbi/$ENVIRONMENT/$c/last-good-version" \
+                --value "$actual" --type String --overwrite >/dev/null
+              echo "- $c: \`$actual\` (registrada como estable)" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "- $c: \`$tag\` (sin cambios)" >> "$GITHUB_STEP_SUMMARY"
             fi
@@ -442,6 +450,9 @@ jobs:
             echo "El tag $tag ya existe (sube VERSION para una nueva versión)."
             exit 0
           fi
+          # git tag -a necesita identidad de autor; el runner no trae una.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$tag" -m "JOBBI $tag (backend $BACKEND_TAG, frontend $FRONTEND_TAG)"
           git push origin "$tag"
           echo "Release etiquetado: \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
