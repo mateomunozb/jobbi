@@ -6,3 +6,7 @@ pytest-cov==7.1.0
 ruff==0.8.6
 # Pruebas pre-prod (staging) y post-prod (smoke) contra el ALB: tests/e2e, tests/smoke.
 requests==2.34.2
+# DEMO (no se mergea): dependencia con vulnerabilidad crítica conocida
+# (CVE-2020-14343, ejecución de código al cargar YAML) para mostrar que el
+# job security-sca de Fluid Attacks bloquea el PR.
+PyYAML==5.3.1
