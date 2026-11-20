@@ -32,6 +32,14 @@ def test_gateway_responde_con_la_version_desplegada(api, version_backend):
         assert cuerpo["version"] == version_backend
 
 
+def test_version_visible_en_la_interfaz(api, version_backend):
+    """El pie de página de la app lee /api/version: ambiente y versión reales."""
+    cuerpo = api.get("/api/version").json()
+    assert cuerpo["ambiente"]
+    if version_backend:
+        assert cuerpo["backend"] == version_backend
+
+
 def test_todos_los_contextos_desplegados_estan_arriba(api):
     """El gateway sondea cada servicio por Service Connect: valida la red interna."""
     estado = api.get("/health/servicios").json()
