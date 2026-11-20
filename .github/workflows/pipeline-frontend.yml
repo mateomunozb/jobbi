@@ -82,6 +82,12 @@ jobs:
         with:
           sarif_file: ${{ steps.scan.outputs.sarif_file }}
           category: fluid-sast-frontend
+      - name: Bloquear si hay hallazgos (>= umbral)
+        # La action de Fluid solo informa vulnerabilities_found: no falla el job.
+        if: steps.scan.outputs.vulnerabilities_found == 'true'
+        run: |
+          echo "::error::Fluid Attacks encontró vulnerabilidades de severidad >= high. Revisa Security → Code scanning."
+          exit 1
 
   security-sca:
     name: frontend · security-sca
@@ -107,6 +113,12 @@ jobs:
         with:
           sarif_file: ${{ steps.scan.outputs.sarif_file }}
           category: fluid-sca-frontend
+      - name: Bloquear si hay hallazgos (>= umbral)
+        # La action de Fluid solo informa vulnerabilities_found: no falla el job.
+        if: steps.scan.outputs.vulnerabilities_found == 'true'
+        run: |
+          echo "::error::Fluid Attacks encontró vulnerabilidades de severidad >= high. Revisa Security → Code scanning."
+          exit 1
 
   build-and-integration:
     name: frontend · build-and-integration
