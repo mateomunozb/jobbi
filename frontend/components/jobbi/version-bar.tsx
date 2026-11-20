@@ -7,6 +7,7 @@ type Versiones = { ambiente: string; backend: string; frontend: string }
 // Pie de página con el ambiente y la versión desplegada de cada componente.
 // Frontend: /healthz (sirve este mismo contenedor). Backend: /api/version del
 // gateway, por el proxy /api. Si alguno no responde se muestra "—".
+// Cada versión enlaza al endpoint que la reporta, para verificarla en vivo.
 export function VersionBar() {
   const [v, setV] = useState<Versiones | null>(null)
 
@@ -29,9 +30,9 @@ export function VersionBar() {
   if (!v) return null
   return (
     <footer className="version-bar" aria-label="Versión desplegada">
-      <span className="version-ambiente">{v.ambiente}</span>
-      <span>backend {v.backend}</span>
-      <span>frontend {v.frontend}</span>
+      <span className={`version-ambiente version-ambiente-${v.ambiente}`}>{v.ambiente}</span>
+      <a href="/api/version" target="_blank" rel="noopener">backend {v.backend}</a>
+      <a href="/healthz" target="_blank" rel="noopener">frontend {v.frontend}</a>
     </footer>
   )
 }
