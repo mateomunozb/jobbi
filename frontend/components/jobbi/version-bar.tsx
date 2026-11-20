@@ -16,7 +16,8 @@ export function VersionBar() {
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null)
 
-    Promise.all([leer("/healthz"), leer("/api/version")]).then(([front, back]) =>
+    // `leer` nunca rechaza (atrapa sus errores), así que no hace falta .catch.
+    void Promise.all([leer("/healthz"), leer("/api/version")]).then(([front, back]) =>
       setV({
         ambiente: back?.ambiente ?? "—",
         backend: back?.backend ?? "—",
