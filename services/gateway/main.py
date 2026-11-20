@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 
 import httpx
@@ -28,7 +29,7 @@ from fastapi.responses import JSONResponse
 from common import eventos
 from common.cobertura import en_cobertura
 from common.observabilidad import cabeceras_de_traza, log, muestras_de_colas, registrar_metricas
-from common.service import crear_servicio
+from common.service import VERSION, crear_servicio
 
 from .registro import ACTIVOS, SERVICIOS
 
@@ -40,6 +41,10 @@ app = crear_servicio(
         "compone vistas agregadas para el frontend."
     ),
 )
+
+# Ambiente donde corre (staging, production); lo fija Terraform. La interfaz
+# lo muestra en el pie de página junto a la versión desplegada.
+AMBIENTE = os.getenv("JOBBI_AMBIENTE", "local")
 
 TIMEOUT = httpx.Timeout(10.0, connect=3.0)
 # Cada petición del frontend se abre en varias hacia los servicios (una vista BFF
@@ -222,6 +227,12 @@ async def health_servicios():
         "disponibles": len(resultados) - len(caidos),
         "servicios": resultados,
     }
+
+
+@app.get("/api/version", tags=["operación"],
+         summary="Ambiente y versión del backend desplegada")
+def version():
+    return {"ambiente": AMBIENTE, "backend": VERSION}
 
 
 @app.get("/api/servicios", tags=["operación"],
