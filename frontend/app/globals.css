@@ -133,4 +133,7 @@ fieldset{border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:8px}
 .aviso-mas{display:block;font-size:11px;color:var(--brand);font-weight:700;margin-top:5px}
 /* Pie de página con la versión desplegada (components/jobbi/version-bar.tsx). */
 .version-bar { display:flex; flex-wrap:wrap; justify-content:center; gap:6px 18px; padding:10px 16px 14px; font:500 12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; color:#4f6268; background:#dfe8e8; }
-.version-bar .version-ambiente { font-weight:700; color:var(--brand-dark); text-transform:uppercase; letter-spacing:.08em; }
+.version-bar a { color:inherit; text-decoration:underline; text-underline-offset:3px; }
+.version-bar a:hover { color:var(--brand-dark); }
+.version-bar .version-ambiente { font-weight:700; text-transform:uppercase; letter-spacing:.08em; padding:1px 8px; border-radius:999px; color:var(--brand-dark); background:var(--brand-soft); }
+.version-bar .version-ambiente-production { color:var(--warning); background:var(--warning-soft); }
