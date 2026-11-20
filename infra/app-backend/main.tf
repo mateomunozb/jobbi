@@ -82,6 +82,7 @@ locals {
     local.base.mensajeria,
     {
       APP_VERSION         = var.image_tag
+      JOBBI_AMBIENTE      = var.environment_name
       AWS_PROVEEDOR       = "aws"
       AWS_REGION          = var.aws_region
       CREAR_BASE_SI_FALTA = "true"
